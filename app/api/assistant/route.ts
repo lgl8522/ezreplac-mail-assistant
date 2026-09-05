@@ -27,31 +27,56 @@ const schema = {
   required: ['translation', 'logisticsSummary', 'localized', 'drafts'],
 };
 
-export async function POST(request: Request) {
-  // Read the deployed Worker Secret directly. The process.env fallback keeps
-  // local Node-based development working without exposing the secret client-side.
-  const workerEnv = env as Record<string, string | undefined>;
-  const workerSecret =
-    typeof workerEnv.OPENAI_API_KEY === 'string'
-      ? workerEnv.OPENAI_API_KEY
-      : undefined;
+type SecretStoreBinding = { get(): Promise<unknown> };
+
+function isSecretStoreBinding(value: unknown): value is SecretStoreBinding {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'get' in value &&
+    typeof value.get === 'function'
+  );
+}
+
+async function readApiKey() {
+  const workerEnv = env as Record<string, unknown>;
+  const workerBinding = workerEnv.OPENAI_API_KEY;
   const processSecret =
     typeof process.env.OPENAI_API_KEY === 'string'
       ? process.env.OPENAI_API_KEY
       : undefined;
-  // Some framework wrappers expose a non-string placeholder through env.
-  // process.env contains the populated, raw Worker Secret when available.
-  const openaiApiKey = processSecret ?? workerSecret;
+  const workerSecret =
+    typeof workerBinding === 'string' ? workerBinding : undefined;
+
+  if (processSecret)
+    return { apiKey: processSecret, source: 'process' as const };
+  if (workerSecret)
+    return { apiKey: workerSecret, source: 'worker-secret' as const };
+  if (isSecretStoreBinding(workerBinding)) {
+    const stored = await workerBinding.get();
+    if (typeof stored === 'string' && stored)
+      return { apiKey: stored, source: 'secrets-store' as const };
+  }
+  return {
+    apiKey: undefined,
+    source: 'missing' as const,
+    bindingPresent: Object.hasOwn(workerEnv, 'OPENAI_API_KEY'),
+    bindingIsSecretStore: isSecretStoreBinding(workerBinding),
+  };
+}
+
+export async function POST(request: Request) {
+  const secret = await readApiKey();
+  const openaiApiKey = secret.apiKey;
   if (!openaiApiKey) {
     // Safe deployment diagnostic: never log a secret value, length, headers,
     // or buyer content. This only distinguishes a missing binding from an
     // empty value or process.env compatibility issue.
     console.warn({
       event: 'openai_secret_unavailable',
-      workerBindingPresent: Object.hasOwn(workerEnv, 'OPENAI_API_KEY'),
-      workerSecretNonEmpty: Boolean(workerSecret),
+      workerBindingPresent: secret.bindingPresent ?? false,
+      workerBindingIsSecretStore: secret.bindingIsSecretStore ?? false,
       processSecretPresent: Object.hasOwn(process.env, 'OPENAI_API_KEY'),
-      processSecretNonEmpty: Boolean(processSecret),
     });
     return NextResponse.json(
       {
