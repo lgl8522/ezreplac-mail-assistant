@@ -14,7 +14,9 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
 
 const localBindingConfig = {
   main: 'vinext/server/fetch-handler',
-  compatibility_flags: ['nodejs_compat'],
+  // Populate process.env with Worker Secrets at runtime. This is needed by
+  // the API routes and keeps OPENAI_API_KEY out of the client bundle.
+  compatibility_flags: ['nodejs_compat', 'nodejs_compat_populate_process_env'],
   d1_databases: d1
     ? [
         {
