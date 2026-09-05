@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { env } from 'cloudflare:workers';
 
 function cleanHtml(value: string) {
   return value.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -8,8 +9,9 @@ export async function GET(request: Request) {
   const number = new URL(request.url).searchParams.get('number')?.trim();
   if (!number || !/^[A-Za-z0-9-]{5,50}$/.test(number)) return NextResponse.json({ message: '请输入有效物流单号。' }, { status: 400 });
   const fallbackUrl = `https://t.17track.net/zh-cn?nums=${encodeURIComponent(number)}`;
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const token = process.env.BROWSER_RUN_API_TOKEN;
+  const workerEnv = env as Record<string, string | undefined>;
+  const accountId = workerEnv.CLOUDFLARE_ACCOUNT_ID ?? process.env.CLOUDFLARE_ACCOUNT_ID;
+  const token = workerEnv.BROWSER_RUN_API_TOKEN ?? process.env.BROWSER_RUN_API_TOKEN;
   if (!accountId || !token) return NextResponse.json({ fallbackUrl, message: '自动浏览器尚未配置。已打开 17TRACK 直达查询页；请复制物流结果后粘贴回本工具。' });
 
   try {
