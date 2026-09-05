@@ -29,8 +29,21 @@ const schema = {
 export async function POST(request: Request) {
   // Read the deployed Worker Secret directly. The process.env fallback keeps
   // local Node-based development working without exposing the secret client-side.
-  const openaiApiKey = (env as Record<string, string | undefined>).OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+  const workerEnv = env as Record<string, string | undefined>;
+  const workerSecret = workerEnv.OPENAI_API_KEY;
+  const processSecret = process.env.OPENAI_API_KEY;
+  const openaiApiKey = workerSecret ?? processSecret;
   if (!openaiApiKey) {
+    // Safe deployment diagnostic: never log a secret value, length, headers,
+    // or buyer content. This only distinguishes a missing binding from an
+    // empty value or process.env compatibility issue.
+    console.warn({
+      event: 'openai_secret_unavailable',
+      workerBindingPresent: Object.hasOwn(workerEnv, 'OPENAI_API_KEY'),
+      workerSecretNonEmpty: Boolean(workerSecret),
+      processSecretPresent: Object.hasOwn(process.env, 'OPENAI_API_KEY'),
+      processSecretNonEmpty: Boolean(processSecret),
+    });
     return NextResponse.json({ error: '尚未配置 OPENAI_API_KEY。请在 Cloudflare Worker Secret 中设置后再使用。' }, { status: 503 });
   }
 
