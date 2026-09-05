@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
@@ -131,7 +131,7 @@ export default function Home() {
   const [activeDraft, setActiveDraft] = useState<string | null>(null);
   const [editedChinese, setEditedChinese] = useState('');
   const [busy, setBusy] = useState<
-    'translate' | 'drafts' | 'sync' | 'track' | null
+    'translate' | 'drafts' | 'sync' | 'track' | 'logistics' | null
   >(null);
   const [notice, setNotice] = useState('');
   const [newShop, setNewShop] = useState<Shop>({
@@ -141,6 +141,8 @@ export default function Home() {
   });
   const [apiSettings, setApiSettings] =
     useState<ApiSettings>(defaultApiSettings);
+  const logisticsCache = useRef(new Map<string, string>());
+  const logisticsRequest = useRef(0);
   const shop = useMemo(
     () => shops.find((item) => item.id === shopId) ?? shops[0],
     [shops, shopId],
@@ -150,6 +152,25 @@ export default function Home() {
   useEffect(() => {
     void loadConfiguration();
   }, []);
+  useEffect(() => {
+    const raw = logistics.trim();
+    const requestId = ++logisticsRequest.current;
+    if (!raw) {
+      setLogisticsSummary('');
+      return;
+    }
+
+    const cached = logisticsCache.current.get(raw);
+    if (cached) {
+      setLogisticsSummary(cached);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void analyzeLogistics(raw, requestId);
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [logistics]);
   async function loadConfiguration() {
     const browserSettings = getBrowserApiSettings();
     try {
@@ -223,13 +244,21 @@ export default function Home() {
     }
   }
   async function ask(
-    mode: 'translate' | 'drafts' | 'sync',
+    mode: 'translate' | 'drafts' | 'sync' | 'logistics',
     extra: Record<string, unknown> = {},
   ) {
     const r = await fetch('/api/assistant', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, shop, mail, logistics, action, ...extra }),
+      body: JSON.stringify({
+        mode,
+        shop,
+        mail,
+        logistics,
+        logisticsSummary,
+        action,
+        ...extra,
+      }),
     });
     const result = (await r.json()) as {
       error?: string;
@@ -252,6 +281,22 @@ export default function Home() {
       setNotice(e instanceof Error ? e.message : '翻译失败。');
     } finally {
       setBusy(null);
+    }
+  }
+  async function analyzeLogistics(raw: string, requestId: number) {
+    setBusy('logistics');
+    try {
+      const r = await ask('logistics', { logistics: raw });
+      const summary = r.logisticsSummary?.trim();
+      if (summary && requestId === logisticsRequest.current) {
+        logisticsCache.current.set(raw, summary);
+        setLogisticsSummary(summary);
+      }
+    } catch (e) {
+      if (requestId === logisticsRequest.current)
+        setNotice(e instanceof Error ? e.message : '物流判断失败。');
+    } finally {
+      if (requestId === logisticsRequest.current) setBusy(null);
     }
   }
   async function generate() {
@@ -311,8 +356,10 @@ export default function Home() {
         fallbackUrl?: string;
         message?: string;
       };
-      if (result.summary) setLogisticsSummary(result.summary);
-      if (result.raw) setLogistics(result.raw);
+      if (result.raw) {
+        setLogistics(result.raw);
+        setNotice('已获取物流内容，正在自动判断。');
+      }
       if (result.message) setNotice(result.message);
       if (result.fallbackUrl)
         window.open(result.fallbackUrl, '_blank', 'noopener,noreferrer');
@@ -568,14 +615,20 @@ export default function Home() {
               placeholder="粘贴 17TRACK 的物流轨迹、状态和单号…"
               className="mt-3 min-h-36 resize-y bg-white"
             />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-2"
-              onClick={() => setLogistics(sampleLogistics)}
-            >
-              填入物流示例
-            </Button>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <p className="text-xs text-slate-500">
+                {busy === 'logistics'
+                  ? '正在自动判断物流状态…'
+                  : '粘贴完成后将自动判断，并为处理方式提供指引。'}
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLogistics(sampleLogistics)}
+              >
+                填入物流示例
+              </Button>
+            </div>
             {logisticsSummary && (
               <div className="mt-3 rounded-xl border border-cyan-100 bg-cyan-50 p-4">
                 <p className="text-sm font-semibold text-cyan-950">物流判断</p>
