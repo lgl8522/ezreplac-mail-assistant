@@ -15,6 +15,21 @@ export const defaultRuntimeSettings: RuntimeSettings = {
   model: 'gpt-5.6-luna',
 };
 
+function normalizeResponsesEndpoint(value: string): string | null {
+  const endpoint = value.trim();
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== 'https:' || !url.hostname) return null;
+    if (url.search || url.hash) return null;
+
+    const path = url.pathname.replace(/\/+$/, '');
+    url.pathname = path.endsWith('/responses') ? path : `${path}/responses`;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function getSettingsStore() {
   return (env as Record<string, unknown>).SHOP_TEMPLATES as KVStore | undefined;
 }
@@ -33,7 +48,9 @@ export async function getRuntimeSettings(): Promise<RuntimeSettings> {
     typeof saved.model !== 'string'
   )
     return defaultRuntimeSettings;
-  return { endpoint: saved.endpoint, model: saved.model };
+  const endpoint = normalizeResponsesEndpoint(saved.endpoint);
+  if (!endpoint) return defaultRuntimeSettings;
+  return { endpoint, model: saved.model };
 }
 
 export function validateRuntimeSettings(
@@ -43,7 +60,7 @@ export function validateRuntimeSettings(
   const { endpoint, model } = value as Partial<RuntimeSettings>;
   if (typeof endpoint !== 'string' || typeof model !== 'string') return null;
 
-  const normalizedEndpoint = endpoint.trim();
+  const normalizedEndpoint = normalizeResponsesEndpoint(endpoint);
   const normalizedModel = model.trim();
   if (
     !normalizedEndpoint ||
@@ -52,13 +69,6 @@ export function validateRuntimeSettings(
     normalizedModel.length > 120
   )
     return null;
-
-  try {
-    const url = new URL(normalizedEndpoint);
-    if (url.protocol !== 'https:' || !url.hostname) return null;
-  } catch {
-    return null;
-  }
 
   return { endpoint: normalizedEndpoint, model: normalizedModel };
 }

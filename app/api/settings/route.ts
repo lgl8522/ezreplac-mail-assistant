@@ -21,7 +21,7 @@ export async function PUT(request: Request) {
   const settings = validateRuntimeSettings(await request.json());
   if (!settings) {
     return NextResponse.json(
-      { error: '请填写有效的 HTTPS Responses API 完整地址和模型名称。' },
+      { error: '请填写有效的 HTTPS Responses API 地址和模型名称。' },
       { status: 400 },
     );
   }

@@ -97,7 +97,9 @@ export async function POST(request: Request) {
 4. 已签收未收到：建议检查门口、院内、邮件箱、安全位置、邻居/物业或当地承运商；不要直接判定丢失。
 5. 禁止以退款、补发、折扣或任何补偿换取、要求或暗示删除/修改评价；也不要生成规避平台规则的话术。
 6. 固定英文落款为 EZReplac。严格执行当前店铺的正常品牌语气规则。
-7. 返回严格 JSON，不要 markdown。`;
+7. 返回严格 JSON，不要 markdown。你必须返回下列 JSON Schema 中所有 required 字段，不能新增字段；无内容时使用空字符串或空数组：${JSON.stringify(
+    schema,
+  )}`;
 
   const modeGuide: Record<string, string> = {
     translate:

@@ -56,6 +56,38 @@ const defaultApiSettings: ApiSettings = {
   endpoint: 'https://api.sudorelay.com/v1/responses',
   model: 'gpt-5.6-luna',
 };
+const apiSettingsStorageKey = 'ezreplac-api-settings';
+
+function getBrowserApiSettings(): ApiSettings | null {
+  try {
+    const saved = JSON.parse(
+      window.localStorage.getItem(apiSettingsStorageKey) ?? 'null',
+    ) as Partial<ApiSettings> | null;
+    if (
+      saved &&
+      typeof saved.endpoint === 'string' &&
+      typeof saved.model === 'string' &&
+      saved.endpoint &&
+      saved.model
+    )
+      return { endpoint: saved.endpoint, model: saved.model };
+  } catch {
+    /* Ignore an old or malformed browser cache. */
+  }
+  return null;
+}
+
+function saveBrowserApiSettings(settings: ApiSettings) {
+  try {
+    window.localStorage.setItem(
+      apiSettingsStorageKey,
+      JSON.stringify(settings),
+    );
+  } catch {
+    /* Cloud persistence can still succeed when browser storage is unavailable. */
+  }
+}
+
 const actions: Record<
   Action,
   { title: string; detail: string; color: string }
@@ -119,6 +151,7 @@ export default function Home() {
     void loadConfiguration();
   }, []);
   async function loadConfiguration() {
+    const browserSettings = getBrowserApiSettings();
     try {
       const [shopsResponse, settingsResponse] = await Promise.all([
         fetch('/api/shops'),
@@ -135,6 +168,9 @@ export default function Home() {
     } catch {
       /* defaults remain usable before KV is bound */
     }
+    // Browser cache keeps the current workstation usable even before the KV
+    // binding is configured. It contains no API Key.
+    if (browserSettings) setApiSettings(browserSettings);
   }
   async function loadShops() {
     try {
@@ -162,6 +198,7 @@ export default function Home() {
     }
   }
   async function saveApiSettings() {
+    saveBrowserApiSettings(apiSettings);
     try {
       const r = await fetch('/api/settings', {
         method: 'PUT',
@@ -173,10 +210,16 @@ export default function Home() {
         settings?: ApiSettings;
       };
       if (!r.ok) throw new Error(result.error ?? '保存失败。');
-      if (result.settings) setApiSettings(result.settings);
-      setNotice('接口地址和模型已保存。');
+      if (result.settings) {
+        setApiSettings(result.settings);
+        saveBrowserApiSettings(result.settings);
+      }
+      setNotice('接口地址和模型已保存到浏览器及云端。');
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : '接口设置保存失败。');
+      const detail = e instanceof Error ? `（${e.message}）` : '';
+      setNotice(
+        `接口地址和模型已保存到当前浏览器；云端保存未成功，发送请求仍会使用云端原配置${detail}`,
+      );
     }
   }
   async function ask(
@@ -428,7 +471,7 @@ export default function Home() {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="mt-2 grid gap-4">
-                  <Field label="Responses API 完整地址">
+                  <Field label="Responses API 地址">
                     <Input
                       value={apiSettings.endpoint}
                       onChange={(e) =>
@@ -437,7 +480,7 @@ export default function Home() {
                           endpoint: e.target.value,
                         })
                       }
-                      placeholder="https://api.example.com/v1/responses"
+                      placeholder="https://api.example.com/v1（自动补 /responses）"
                     />
                   </Field>
                   <Field label="模型名称">
