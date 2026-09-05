@@ -31,9 +31,17 @@ export async function POST(request: Request) {
   // Read the deployed Worker Secret directly. The process.env fallback keeps
   // local Node-based development working without exposing the secret client-side.
   const workerEnv = env as Record<string, string | undefined>;
-  const workerSecret = workerEnv.OPENAI_API_KEY;
-  const processSecret = process.env.OPENAI_API_KEY;
-  const openaiApiKey = workerSecret ?? processSecret;
+  const workerSecret =
+    typeof workerEnv.OPENAI_API_KEY === 'string'
+      ? workerEnv.OPENAI_API_KEY
+      : undefined;
+  const processSecret =
+    typeof process.env.OPENAI_API_KEY === 'string'
+      ? process.env.OPENAI_API_KEY
+      : undefined;
+  // Some framework wrappers expose a non-string placeholder through env.
+  // process.env contains the populated, raw Worker Secret when available.
+  const openaiApiKey = processSecret ?? workerSecret;
   if (!openaiApiKey) {
     // Safe deployment diagnostic: never log a secret value, length, headers,
     // or buyer content. This only distinguishes a missing binding from an
