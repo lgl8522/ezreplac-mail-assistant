@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { env } from 'cloudflare:workers';
+import { getRuntimeSettings } from '@/lib/runtime-settings';
 
 const schema = {
   type: 'object',
@@ -44,10 +45,16 @@ export async function POST(request: Request) {
       processSecretPresent: Object.hasOwn(process.env, 'OPENAI_API_KEY'),
       processSecretNonEmpty: Boolean(processSecret),
     });
-    return NextResponse.json({ error: '尚未配置 OPENAI_API_KEY。请在 Cloudflare Worker Secret 中设置后再使用。' }, { status: 503 });
+    return NextResponse.json(
+      {
+        error:
+          '尚未配置 OPENAI_API_KEY。请在 Cloudflare Worker Secret 中设置后再使用。',
+      },
+      { status: 503 },
+    );
   }
 
-  const payload = await request.json() as Record<string, unknown>;
+  const payload = (await request.json()) as Record<string, unknown>;
   const instructions = `你是个人亚马逊卖家的邮件助手。工作目标：准确翻译买家邮件，并根据店铺模板、物流信息和卖家已经选择的处理方式生成可直接复制的客服邮件。
 
 强制规则：
@@ -60,8 +67,10 @@ export async function POST(request: Request) {
 7. 返回严格 JSON，不要 markdown。`;
 
   const modeGuide: Record<string, string> = {
-    translate: '只需翻译邮件为中文，并简短说明买家核心诉求。drafts 必须为空数组，localized 为空字符串。',
-    drafts: '先翻译邮件，提取/归纳物流状态，再给出恰好 3 个语气或措辞略有不同、但事实与承诺一致的回复版本。每个版本必须含中文与买家语言。',
+    translate:
+      '只需翻译邮件为中文，并简短说明买家核心诉求。drafts 必须为空数组，localized 为空字符串。',
+    drafts:
+      '先翻译邮件，提取/归纳物流状态，再给出恰好 3 个语气或措辞略有不同、但事实与承诺一致的回复版本。每个版本必须含中文与买家语言。',
     sync: '用户已在中文审核版中修改内容。将其忠实翻译为买家原邮件语言，localized 返回翻译结果；drafts 必须为空数组。',
   };
 
@@ -74,28 +83,53 @@ export async function POST(request: Request) {
     editedChinese: payload.chinese ?? '',
   });
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const runtimeSettings = await getRuntimeSettings();
+  const response = await fetch(runtimeSettings.endpoint, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${openaiApiKey}`,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({
-      model: 'gpt-5.6-luna',
+      model: runtimeSettings.model,
       store: false,
       reasoning: { effort: 'low' },
       instructions,
       input,
-      text: { format: { type: 'json_schema', name: 'mail_assistant_result', strict: true, schema } },
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'mail_assistant_result',
+          strict: true,
+          schema,
+        },
+      },
     }),
   });
 
   if (!response.ok) {
     const error = await response.text();
-    return NextResponse.json({ error: `OpenAI 请求失败：${error.slice(0, 300)}` }, { status: 502 });
+    return NextResponse.json(
+      { error: `OpenAI 请求失败：${error.slice(0, 300)}` },
+      { status: 502 },
+    );
   }
-  const result = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
-  const text = result.output_text ?? result.output?.flatMap((item) => item.content ?? []).map((item) => item.text ?? '').join('');
+  const result = (await response.json()) as {
+    output_text?: string;
+    output?: Array<{ content?: Array<{ text?: string }> }>;
+  };
+  const text =
+    result.output_text ??
+    result.output
+      ?.flatMap((item) => item.content ?? [])
+      .map((item) => item.text ?? '')
+      .join('');
   try {
     return NextResponse.json(JSON.parse(text ?? '{}'));
   } catch {
-    return NextResponse.json({ error: '模型返回格式异常，请重试。' }, { status: 502 });
+    return NextResponse.json(
+      { error: '模型返回格式异常，请重试。' },
+      { status: 502 },
+    );
   }
 }

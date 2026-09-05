@@ -17,9 +17,6 @@ const localBindingConfig = {
   // Populate process.env with Worker Secrets at runtime. This is needed by
   // the API routes and keeps OPENAI_API_KEY out of the client bundle.
   compatibility_flags: ['nodejs_compat', 'nodejs_compat_populate_process_env'],
-  // Fail deployment clearly if the Secret was added to another Worker or has
-  // not been deployed in the current environment yet.
-  secrets: { required: ['OPENAI_API_KEY'] },
   d1_databases: d1
     ? [
         {
