@@ -15,7 +15,6 @@ import {
   RotateCcw,
   Send,
   Settings2,
-  Sparkles,
   Truck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -298,11 +297,11 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f5f8fb] text-slate-900">
-      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] items-center gap-4 px-5 py-3 lg:px-8">
+    <main className="min-h-screen bg-[#f5f5f7] text-slate-900">
+      <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-white/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1580px] items-center gap-3 px-5 py-3.5 lg:px-8">
           <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-xl bg-slate-950 text-white">
+            <div className="grid size-10 place-items-center rounded-[13px] bg-slate-950 text-white shadow-sm">
               <Send className="size-5" />
             </div>
             <div className="hidden sm:block">
@@ -310,13 +309,11 @@ export default function Home() {
               <p className="text-xs text-slate-500">客服邮件工作台</p>
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <p className="hidden text-xs font-medium text-slate-500 md:block">
-              当前处理店铺
-            </p>
+          <div className="hidden h-8 w-px bg-slate-200 sm:block" />
+          <div className="min-w-0 sm:w-64">
             <NativeSelect
               aria-label="选择店铺"
-              className="h-11 min-w-56 border-slate-300 bg-white font-semibold shadow-sm"
+              className="h-10 w-full border-0 bg-transparent px-2 font-semibold shadow-none focus:ring-0"
               value={shopId}
               onChange={(e) => setShopId(e.target.value)}
             >
@@ -326,69 +323,28 @@ export default function Home() {
                 </option>
               ))}
             </NativeSelect>
+          </div>
+          <div className="ml-auto flex items-center gap-1.5">
             <Dialog>
               <DialogTrigger
                 render={
                   <Button
                     variant="outline"
-                    size="lg"
+                    size="sm"
                     aria-label="管理店铺模板"
                   />
                 }
               >
-                <Settings2 />
+                店铺管理
               </DialogTrigger>
               <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto p-6">
                 <DialogHeader>
-                  <DialogTitle>工作台设置</DialogTitle>
+                  <DialogTitle>店铺管理</DialogTitle>
                   <DialogDescription>
-                    配置接口与模型，以及每个店铺的回复语气、称呼和规则。
+                    为每个店铺保存独立的称呼、语气与客服规则。
                   </DialogDescription>
                 </DialogHeader>
-                <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                  <p className="text-sm font-semibold text-amber-950">
-                    模型接口设置
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-amber-900/80">
-                    仅支持 OpenAI Responses
-                    兼容接口。自定义服务会收到买家邮件内容；API Key 始终保存在
-                    Cloudflare Worker Secret，不会显示在此处。
-                  </p>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
-                    <Field label="Responses API 完整地址">
-                      <Input
-                        value={apiSettings.endpoint}
-                        onChange={(e) =>
-                          setApiSettings({
-                            ...apiSettings,
-                            endpoint: e.target.value,
-                          })
-                        }
-                        placeholder="https://api.example.com/v1/responses"
-                      />
-                    </Field>
-                    <Field label="模型名称">
-                      <Input
-                        value={apiSettings.model}
-                        onChange={(e) =>
-                          setApiSettings({
-                            ...apiSettings,
-                            model: e.target.value,
-                          })
-                        }
-                        placeholder="gpt-5.6-luna"
-                      />
-                    </Field>
-                  </div>
-                  <Button
-                    className="mt-3"
-                    variant="outline"
-                    onClick={saveApiSettings}
-                  >
-                    保存接口设置
-                  </Button>
-                </section>
-                <div className="border-t border-slate-200 pt-4">
+                <div>
                   <p className="text-sm font-semibold text-slate-900">
                     新增店铺模板
                   </p>
@@ -450,10 +406,62 @@ export default function Home() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            <Dialog>
+              <DialogTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="高级模型设置"
+                    className="text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                  />
+                }
+              >
+                <Settings2 />
+              </DialogTrigger>
+              <DialogContent className="max-w-lg p-6">
+                <DialogHeader>
+                  <DialogTitle>高级模型配置</DialogTitle>
+                  <DialogDescription>
+                    仅在更换模型服务或模型名称时修改。API Key 始终保存在
+                    Cloudflare Worker Secret。
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="mt-2 grid gap-4">
+                  <Field label="Responses API 完整地址">
+                    <Input
+                      value={apiSettings.endpoint}
+                      onChange={(e) =>
+                        setApiSettings({
+                          ...apiSettings,
+                          endpoint: e.target.value,
+                        })
+                      }
+                      placeholder="https://api.example.com/v1/responses"
+                    />
+                  </Field>
+                  <Field label="模型名称">
+                    <Input
+                      value={apiSettings.model}
+                      onChange={(e) =>
+                        setApiSettings({
+                          ...apiSettings,
+                          model: e.target.value,
+                        })
+                      }
+                      placeholder="gpt-5.6-luna"
+                    />
+                  </Field>
+                </div>
+                <DialogFooter>
+                  <Button onClick={saveApiSettings}>保存高级设置</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </header>
-      <div className="mx-auto grid max-w-[1600px] gap-5 px-5 py-6 lg:grid-cols-[minmax(350px,.9fr)_minmax(500px,1.3fr)] lg:px-8">
+      <div className="mx-auto grid max-w-[1580px] gap-5 px-5 py-6 lg:grid-cols-[minmax(620px,1fr)_minmax(470px,.74fr)] lg:px-8 lg:py-7">
         <section className="space-y-5">
           <Panel
             icon={<FileText />}
@@ -535,9 +543,9 @@ export default function Home() {
             )}
           </Panel>
         </section>
-        <section className="space-y-5">
+        <section className="space-y-5 lg:sticky lg:top-[84px] lg:self-start">
           <Panel
-            icon={<Sparkles />}
+            icon={<Check />}
             eyebrow="03 · 处理决定"
             title="先由你选择，再生成回复"
           >
@@ -559,18 +567,16 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-950 px-4 py-3 text-white">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50/80 px-4 py-3.5">
               <div>
-                <p className="text-sm font-semibold">将生成 3 个可选版本</p>
-                <p className="text-xs text-slate-300">
+                <p className="text-sm font-semibold text-slate-900">
+                  将生成 3 个可选版本
+                </p>
+                <p className="text-xs text-slate-500">
                   买家原语言 + 中文审核版 · {actions[action].title}
                 </p>
               </div>
-              <Button
-                className="bg-white text-slate-950 hover:bg-slate-100"
-                onClick={generate}
-                disabled={busy !== null}
-              >
+              <Button onClick={generate} disabled={busy !== null}>
                 {busy === 'drafts' ? (
                   <LoaderCircle className="animate-spin" />
                 ) : (
@@ -710,7 +716,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_2px_18px_rgba(15,23,42,.035)]">
+    <section className="rounded-[20px] border border-slate-200/90 bg-white/90 p-5 shadow-[0_8px_26px_rgba(15,23,42,.045)] backdrop-blur-sm">
       <div className="mb-4 flex items-start gap-3">
         <div className="grid size-9 place-items-center rounded-xl bg-slate-100 text-slate-700">
           {icon}
