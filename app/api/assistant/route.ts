@@ -165,7 +165,11 @@ export async function POST(request: Request) {
       secret.apiKey,
       request.signal,
     );
-    const normalized = checkAndNormalize(task.mode, parsed);
+    const sourceMail =
+      typeof payload.mail === 'string'
+        ? payload.mail.replace(/\r\n/g, '\n')
+        : '';
+    const normalized = checkAndNormalize(task.mode, parsed, sourceMail);
     if (
       task.mode === 'drafts' &&
       !payload.hasTranslation &&

@@ -18,7 +18,32 @@ test('translation excludes store, logistics and reply scaffolding', () => {
   });
   assert.deepEqual(JSON.parse(t.input), { mail: 'Hello' });
   assert.deepEqual(t.schema.required, ['translation', 'language']);
-  assert.ok(t.instructions.length < 250);
+  assert.equal(t.schema.properties.translation.type, 'array');
+  assert.ok(t.instructions.length < 500);
+});
+test('mail translation preserves plaintext lines, blanks and indentation', () => {
+  const mail = 'Subject: Hello\r\n\r\n  - Order YT123456  ';
+  const task = buildTask({ mode: 'translate', mail });
+  assert.equal(task.schema.properties.translation.minItems, 3);
+  assert.equal(task.schema.properties.translation.maxItems, 3);
+  const result = checkAndNormalize(
+    'translate',
+    {
+      translation: ['主题：你好', '这一行必须被丢弃', '- 订单 YT123456'],
+      language: 'en',
+    },
+    mail,
+  );
+  assert.equal(result.translation, '主题：你好\n\n  - 订单 YT123456  ');
+  assert.throws(
+    () =>
+      checkAndNormalize(
+        'translate',
+        { translation: ['主题：你好'], language: 'en' },
+        mail,
+      ),
+    /未保持原文换行/,
+  );
 });
 test('custom-only replies and button combination retain custom priority', () => {
   const t = buildTask({
