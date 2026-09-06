@@ -8,6 +8,29 @@ import {
   compactTracking,
 } from '../lib/assistant-task.ts';
 import { RequestSession } from '../lib/request-session.ts';
+import { MODEL_FORMAT_ERROR, withFormatRetry } from '../lib/format-retry.ts';
+
+test('format failures retry twice and stop after three total attempts', async () => {
+  let attempts = 0;
+  const recovered = await withFormatRetry(async () => {
+    attempts++;
+    if (attempts < 3) throw new Error(MODEL_FORMAT_ERROR);
+    return 'ok';
+  });
+  assert.equal(recovered, 'ok');
+  assert.equal(attempts, 3);
+
+  attempts = 0;
+  await assert.rejects(
+    () =>
+      withFormatRetry(async () => {
+        attempts++;
+        throw new Error(MODEL_FORMAT_ERROR);
+      }),
+    /连续 3 次返回格式异常/,
+  );
+  assert.equal(attempts, 3);
+});
 
 test('translation excludes store, logistics and reply scaffolding', () => {
   const t = buildTask({

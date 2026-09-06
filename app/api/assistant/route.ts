@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { env } from 'cloudflare:workers';
 import { getRuntimeSettings } from '@/lib/runtime-settings';
 import { requireAccess } from '@/lib/access-control';
+import { MODEL_FORMAT_ERROR, withFormatRetry } from '@/lib/format-retry';
 import {
   buildLocalizationTask,
   buildTask,
@@ -85,7 +86,7 @@ function parseJsonOutput(value: string) {
       // Try the next compatible response shape.
     }
   }
-  throw new Error('模型返回格式异常，请重试。');
+  throw new Error(MODEL_FORMAT_ERROR);
 }
 
 async function readProviderJson(response: Response) {
@@ -199,17 +200,19 @@ export async function POST(request: Request) {
         },
         { status: 503 },
       );
-    const parsed = await requestProvider(
-      task,
-      settings,
-      secret.apiKey,
-      request.signal,
-    );
     const sourceMail =
       typeof payload.mail === 'string'
         ? payload.mail.replace(/\r\n/g, '\n')
         : '';
-    const normalized = checkAndNormalize(task.mode, parsed, sourceMail);
+    const normalized = await withFormatRetry(async () => {
+      const parsed = await requestProvider(
+        task,
+        settings,
+        secret.apiKey,
+        request.signal,
+      );
+      return checkAndNormalize(task.mode, parsed, sourceMail);
+    });
     if (
       task.mode === 'drafts' &&
       !payload.hasTranslation &&
@@ -223,16 +226,15 @@ export async function POST(request: Request) {
         chineseDrafts,
         normalized.language ?? 'en',
       );
-      const localization = await requestProvider(
-        localizationTask,
-        settings,
-        secret.apiKey,
-        request.signal,
-      );
-      const localizedDrafts = checkAndNormalizeLocalization(
-        localization,
-        chineseDrafts,
-      );
+      const localizedDrafts = await withFormatRetry(async () => {
+        const localization = await requestProvider(
+          localizationTask,
+          settings,
+          secret.apiKey,
+          request.signal,
+        );
+        return checkAndNormalizeLocalization(localization, chineseDrafts);
+      });
       normalized.drafts = chineseDrafts.map((chinese, index) => ({
         chinese,
         localized: localizedDrafts[index],
