@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { env } from 'cloudflare:workers';
 import { getRuntimeSettings } from '@/lib/runtime-settings';
+import { requireAccess } from '@/lib/access-control';
 import {
   buildLocalizationTask,
   buildTask,
@@ -123,6 +124,8 @@ async function requestProvider(
 }
 
 export async function POST(request: Request) {
+  const unauthorized = await requireAccess(request);
+  if (unauthorized) return unauthorized;
   try {
     let payload: Record<string, unknown>;
     try {

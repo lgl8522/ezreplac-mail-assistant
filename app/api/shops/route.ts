@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getSettingsStore } from '@/lib/runtime-settings';
 import { defaultShop as shopDefaults } from '@/lib/assistant-task';
+import { requireAccess } from '@/lib/access-control';
 
 const defaultShop = [shopDefaults];
 
-export async function GET() {
+export async function GET(request: Request) {
+  const unauthorized = await requireAccess(request);
+  if (unauthorized) return unauthorized;
   const store = getSettingsStore();
   if (!store) return NextResponse.json(defaultShop);
   const saved = await store.get('shops', 'json');
@@ -14,6 +17,8 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  const unauthorized = await requireAccess(request);
+  if (unauthorized) return unauthorized;
   const store = getSettingsStore();
   if (!store)
     return NextResponse.json(

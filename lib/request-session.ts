@@ -3,6 +3,12 @@ import type { AssistantResult, Mode } from './assistant-task';
 // Per-tab, in-memory only. Keys contain the exact task inputs; buyer content is
 // never saved to localStorage, shared KV or a shared server cache.
 export class RequestSession {
+  private readonly onUnauthorized?: () => void;
+
+  constructor(onUnauthorized?: () => void) {
+    this.onUnauthorized = onUnauthorized;
+  }
+
   private cache = new Map<string, { value: AssistantResult; at: number }>();
   private active = new Map<
     Mode,
@@ -54,6 +60,7 @@ export class RequestSession {
       const result = (await response.json()) as AssistantResult & {
         error?: string;
       };
+      if (response.status === 401) this.onUnauthorized?.();
       if (!response.ok)
         throw new Error(
           result.error || `请求失败（HTTP ${response.status}）。`,

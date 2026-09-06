@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { env } from 'cloudflare:workers';
+import { requireAccess } from '@/lib/access-control';
 
 function cleanHtml(value: string) {
   return value
@@ -16,6 +17,8 @@ function cleanHtml(value: string) {
 }
 
 export async function GET(request: Request) {
+  const unauthorized = await requireAccess(request);
+  if (unauthorized) return unauthorized;
   const number = new URL(request.url).searchParams.get('number')?.trim();
   const respond = (body: object, status = 200) =>
     NextResponse.json(body, {

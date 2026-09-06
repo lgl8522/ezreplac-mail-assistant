@@ -5,14 +5,19 @@ import {
   getSettingsStore,
   validateRuntimeSettings,
 } from '@/lib/runtime-settings';
+import { requireAccess } from '@/lib/access-control';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const unauthorized = await requireAccess(request);
+  if (unauthorized) return unauthorized;
   return NextResponse.json(await getRuntimeSettings(), {
     headers: { 'Cache-Control': 'no-store' },
   });
 }
 
 export async function PUT(request: Request) {
+  const unauthorized = await requireAccess(request);
+  if (unauthorized) return unauthorized;
   const store = getSettingsStore();
   if (!store)
     return NextResponse.json(

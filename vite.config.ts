@@ -4,10 +4,8 @@ import vinext from 'vinext';
 import { defineConfig } from 'vite';
 import hostingConfig from './.openai/hosting.json';
 
-const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
-  '00000000-0000-4000-8000-000000000000';
-
 const { d1, r2 } = hostingConfig;
+const historyDatabaseId = process.env.HISTORY_DATABASE_ID?.trim();
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
@@ -17,15 +15,16 @@ const localBindingConfig = {
   // Populate process.env with Worker Secrets at runtime. This is needed by
   // the API routes and keeps OPENAI_API_KEY out of the client bundle.
   compatibility_flags: ['nodejs_compat', 'nodejs_compat_populate_process_env'],
-  d1_databases: d1
-    ? [
-        {
-          binding: d1,
-          database_name: 'site-creator-d1',
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
-        },
-      ]
-    : [],
+  d1_databases:
+    d1 && historyDatabaseId
+      ? [
+          {
+            binding: d1,
+            database_name: 'ezreplace-mail-history',
+            database_id: historyDatabaseId,
+          },
+        ]
+      : [],
   r2_buckets: r2
     ? [
         {

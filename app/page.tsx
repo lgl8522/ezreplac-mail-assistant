@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -20,6 +21,10 @@ import {
   RefreshCw,
   PencilLine,
   Plus,
+  History,
+  Search,
+  Trash2,
+  LogOut,
   X,
 } from 'lucide-react';
 import {
@@ -29,6 +34,13 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
+import {
   defaultShop,
   languageNames,
   type Shop,
@@ -37,10 +49,12 @@ import {
   type Mode,
 } from '@/lib/assistant-task';
 import { RequestSession } from '@/lib/request-session';
+import type { MailHistoryRecord } from '@/lib/mail-history';
 import './workspace.css';
 
 type Settings = { endpoint: string; model: string };
 type Translation = { mail: string; text: string; language: string };
+type AuthState = 'checking' | 'locked' | 'ready';
 const defaults: Settings = {
   endpoint: 'https://api.sudorelay.com/v1/responses',
   model: 'gpt-5.6-luna',
@@ -56,8 +70,37 @@ function message(error: unknown) {
 function cancelled(error: unknown) {
   return error instanceof Error && error.name === 'AbortError';
 }
+function dateFilterValue(timestamp: number) {
+  const date = new Date(timestamp);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function sourceKey(
+  mail: string,
+  logistics: string,
+  custom: string,
+  action: string,
+  language: string,
+  shop: Shop,
+  settings: Settings,
+) {
+  return JSON.stringify([
+    mail,
+    logistics,
+    custom,
+    action,
+    language,
+    shop,
+    settings,
+  ]);
+}
 
 export default function Home() {
+  const [authState, setAuthState] = useState<AuthState>('checking');
+  const [accessConfigured, setAccessConfigured] = useState(true);
+  const [accessCode, setAccessCode] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [shops, setShops] = useState<Shop[]>([defaultShop]);
   const [shopId, setShopId] = useState(defaultShop.id);
   const shop = shops.find((s) => s.id === shopId) ?? shops[0];
@@ -93,14 +136,24 @@ export default function Home() {
   const [configured, setConfigured] = useState(false);
   const [shopDialog, setShopDialog] = useState(false);
   const [modelDialog, setModelDialog] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyRecords, setHistoryRecords] = useState<MailHistoryRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historySaving, setHistorySaving] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyShop, setHistoryShop] = useState('all');
+  const [historyDate, setHistoryDate] = useState('');
   const [shopForm, setShopForm] = useState<Shop>(defaultShop);
   const [saving, setSaving] = useState(false);
   const [modalNotice, setModalNotice] = useState('');
-  const [requests] = useState(() => new RequestSession());
+  const [requests] = useState(
+    () => new RequestSession(() => setAuthState('locked')),
+  );
   const trackAbort = useRef<AbortController | null>(null);
   const trackCache = useRef(new Map<string, { raw: string; at: number }>());
   const job = useRef(0);
-  const source = JSON.stringify([
+  const source = sourceKey(
     mail,
     logistics,
     custom,
@@ -108,13 +161,17 @@ export default function Home() {
     language,
     shop,
     settings,
-  ]);
+  );
   const latest = useRef({ source, logistics, mail, version, chinese: '' });
+  const analysisRef = useRef(analysis);
   const selected = drafts[version];
   const chinese = edits[version] ?? selected?.chinese ?? '';
   useLayoutEffect(() => {
     latest.current = { source, logistics, mail, version, chinese };
   }, [source, logistics, mail, version, chinese]);
+  useLayoutEffect(() => {
+    analysisRef.current = analysis;
+  }, [analysis]);
   const busy = busyTask?.source === source ? busyTask.mode : null;
   function setBusy(mode: Mode | null) {
     setBusyTask(mode ? { mode, source } : null);
@@ -131,19 +188,72 @@ export default function Home() {
   const detected =
     currentTranslation?.language || (mail.match(/[\u3040-\u30ff]/) ? 'ja' : '');
   const target = language === 'auto' ? detected || 'auto' : language;
+  const filteredHistory = useMemo(() => {
+    const query = historySearch.trim().toLocaleLowerCase();
+    return historyRecords.filter((record) => {
+      if (historyShop !== 'all' && record.shopId !== historyShop) return false;
+      if (historyDate && dateFilterValue(record.createdAt) !== historyDate)
+        return false;
+      if (!query) return true;
+      return [
+        record.shopName,
+        record.buyerMail,
+        record.buyerTranslation,
+        record.trackingNumber,
+        record.logisticsSummary,
+        record.customInstruction,
+        record.chineseReply,
+        record.localizedReply,
+      ].some((value) => value.toLocaleLowerCase().includes(query));
+    });
+  }, [historyDate, historyRecords, historySearch, historyShop]);
+
+  const apiFetch = useCallback(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetch(input, init);
+      if (response.status === 401) setAuthState('locked');
+      return response;
+    },
+    [],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
+    void fetch('/api/auth/status', {
+      signal: controller.signal,
+      cache: 'no-store',
+    })
+      .then(async (response) => {
+        const result = (await response.json()) as {
+          configured?: boolean;
+          authenticated?: boolean;
+        };
+        if (controller.signal.aborted) return;
+        setAccessConfigured(Boolean(result.configured));
+        setAuthState(result.authenticated ? 'ready' : 'locked');
+      })
+      .catch((error) => {
+        if (!cancelled(error)) {
+          setLoginError('无法连接登录服务，请刷新重试。');
+          setAuthState('locked');
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (authState !== 'ready') return;
+    const controller = new AbortController();
     async function load() {
       const results = await Promise.allSettled([
-        fetch('/api/shops', {
+        apiFetch('/api/shops', {
           signal: controller.signal,
           cache: 'no-store',
         }).then(async (r) => {
           if (!r.ok) throw Error();
           return r.json() as Promise<Shop[]>;
         }),
-        fetch('/api/settings', {
+        apiFetch('/api/settings', {
           signal: controller.signal,
           cache: 'no-store',
         }).then(async (r) => {
@@ -168,7 +278,7 @@ export default function Home() {
       requests.clear();
       trackAbort.current?.abort();
     };
-  }, [requests]);
+  }, [apiFetch, authState, requests]);
   useEffect(() => {
     // Invalidate all reply work on context changes, independently of logistics.
     job.current++;
@@ -181,9 +291,35 @@ export default function Home() {
   useEffect(() => {
     trackAbort.current?.abort();
   }, [trackingNumber]);
+  useEffect(() => {
+    if (!historyOpen) return;
+    const controller = new AbortController();
+    void fetch('/api/history', {
+      signal: controller.signal,
+      cache: 'no-store',
+    })
+      .then(async (response) => {
+        if (response.status === 401) setAuthState('locked');
+        const result = (await response.json()) as {
+          records?: MailHistoryRecord[];
+          error?: string;
+        };
+        if (!response.ok) throw Error(result.error ?? '历史记录读取失败。');
+        setHistoryRecords(result.records ?? []);
+      })
+      .catch((error) => {
+        if (!cancelled(error)) setHistoryError(message(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHistoryLoading(false);
+      });
+    return () => controller.abort();
+  }, [historyOpen]);
   const analyze = useCallback(
     async (raw: string): Promise<Analysis | null> => {
       if (!raw) return null;
+      const restored = analysisRef.current;
+      if (restored?.raw === raw) return restored.result;
       if (!configured) throw Error('请先保存模型设置。');
       setAnalyzingRaw(raw);
       setAnalysisError(null);
@@ -343,7 +479,7 @@ export default function Home() {
     setTrackBusy(true);
     setNotice('');
     try {
-      const r = await fetch(
+      const r = await apiFetch(
         '/api/track?number=' + encodeURIComponent(trackingNumber.trim()),
         { signal: controller.signal },
       );
@@ -416,11 +552,174 @@ export default function Home() {
       setNotice('复制失败，请手动选择文本复制。');
     }
   }
+  async function copyBuyerReply() {
+    if (!selected || dirty || stale || busy || historySaving) return;
+    try {
+      await navigator.clipboard.writeText(selected.localized);
+    } catch {
+      setNotice('复制失败，请手动选择文本复制。');
+      return;
+    }
+
+    const record = {
+      id: crypto.randomUUID(),
+      shopId: shop.id,
+      shopName: shop.name,
+      buyerMail: mail,
+      buyerTranslation: currentTranslation?.text ?? '',
+      trackingNumber: trackingNumber.trim(),
+      logisticsStatus: currentAnalysis?.status ?? '',
+      logisticsSummary: currentAnalysis?.summary ?? '',
+      logisticsRecommendation: currentAnalysis?.recommendation ?? '',
+      customInstruction: custom,
+      action,
+      chineseReply: chinese,
+      localizedReply: selected.localized,
+      targetLanguage: draftLanguage,
+    };
+    setHistorySaving(true);
+    try {
+      const response = await apiFetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+      const result = (await response.json()) as {
+        record?: MailHistoryRecord;
+        error?: string;
+      };
+      if (!response.ok || !result.record)
+        throw Error(result.error ?? '历史记录保存失败。');
+      setHistoryRecords((records) => [
+        result.record!,
+        ...records.filter((item) => item.id !== result.record!.id),
+      ]);
+      setNotice('已复制，历史记录已保存。');
+    } catch (error) {
+      setNotice(`已复制，但${message(error)}`);
+    } finally {
+      setHistorySaving(false);
+    }
+  }
+  function restoreHistory(record: MailHistoryRecord) {
+    const restoredShop =
+      shops.find((item) => item.id === record.shopId) ?? shop;
+    const restoredAction = ['wait', 'refund', 'resend'].includes(record.action)
+      ? record.action
+      : 'none';
+    const restoredLanguage = record.targetLanguage || 'en';
+    const restoredLogistics = [
+      record.logisticsStatus && `物流状态：${record.logisticsStatus}`,
+      record.logisticsSummary && `物流摘要：${record.logisticsSummary}`,
+      record.logisticsRecommendation &&
+        `处理建议：${record.logisticsRecommendation}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const restoredAnalysis = restoredLogistics
+      ? {
+          raw: restoredLogistics,
+          result: {
+            status: record.logisticsStatus,
+            summary: record.logisticsSummary,
+            recommendation: record.logisticsRecommendation,
+          },
+        }
+      : null;
+    const restoredSource = sourceKey(
+      record.buyerMail,
+      restoredLogistics,
+      record.customInstruction,
+      restoredAction,
+      restoredLanguage,
+      restoredShop,
+      settings,
+    );
+
+    job.current++;
+    requests.clear();
+    trackAbort.current?.abort();
+    setShopId(restoredShop.id);
+    setMail(record.buyerMail);
+    setTranslation(
+      record.buyerMail && record.buyerTranslation
+        ? {
+            mail: record.buyerMail,
+            text: record.buyerTranslation,
+            language: restoredLanguage,
+          }
+        : null,
+    );
+    setTrackingNumber(record.trackingNumber);
+    setLogistics(restoredLogistics);
+    setAnalysis(restoredAnalysis);
+    setAnalyzingRaw('');
+    setAnalysisError(null);
+    setCustom(record.customInstruction);
+    setAction(restoredAction);
+    setLanguage(restoredLanguage);
+    setDrafts([
+      {
+        chinese: record.chineseReply,
+        localized: record.localizedReply,
+      },
+    ]);
+    setVersion(0);
+    setEdits({});
+    setDraftLanguage(restoredLanguage);
+    setDraftSource(restoredSource);
+    setBusy(null);
+    setHistoryOpen(false);
+    setNotice('历史记录已回填。');
+  }
+  async function deleteHistory(record: MailHistoryRecord) {
+    if (!window.confirm(`删除 ${record.shopName} 的这条历史记录？`)) return;
+    try {
+      const response = await apiFetch(
+        '/api/history?id=' + encodeURIComponent(record.id),
+        { method: 'DELETE' },
+      );
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw Error(result.error ?? '历史记录删除失败。');
+      setHistoryRecords((records) =>
+        records.filter((item) => item.id !== record.id),
+      );
+    } catch (error) {
+      setHistoryError(message(error));
+    }
+  }
+  async function login() {
+    if (!/^\d{4}$/.test(accessCode) || loginBusy) return;
+    setLoginBusy(true);
+    setLoginError('');
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: accessCode }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw Error(result.error ?? '登录失败。');
+      setAccessCode('');
+      setAuthState('ready');
+    } catch (error) {
+      setLoginError(message(error));
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+    nextMail();
+    setAccessCode('');
+    setLoginError('');
+    setAuthState('locked');
+  }
   async function saveSettings() {
     setSaving(true);
     setModalNotice('');
     try {
-      const r = await fetch('/api/settings', {
+      const r = await apiFetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settingsForm),
@@ -464,7 +763,7 @@ export default function Home() {
     setSaving(true);
     setModalNotice('');
     try {
-      const r = await fetch('/api/shops', {
+      const r = await apiFetch('/api/shops', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(next),
@@ -481,6 +780,59 @@ export default function Home() {
       setSaving(false);
     }
   }
+
+  if (authState !== 'ready')
+    return (
+      <main className="access-page">
+        <form
+          className="access-card"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void login();
+          }}
+        >
+          <div className="access-mark">E</div>
+          <div>
+            <h1>EZReplace</h1>
+            <p>请输入访问校验码</p>
+          </div>
+          {authState === 'checking' ? (
+            <div className="access-checking">正在验证…</div>
+          ) : (
+            <>
+              <input
+                aria-label="四位数字校验码"
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                maxLength={4}
+                pattern="[0-9]{4}"
+                type="password"
+                value={accessCode}
+                onChange={(event) =>
+                  setAccessCode(
+                    event.target.value.replace(/\D/g, '').slice(0, 4),
+                  )
+                }
+                placeholder="••••"
+              />
+              <button
+                className="access-submit"
+                disabled={!/^\d{4}$/.test(accessCode) || loginBusy}
+                type="submit"
+              >
+                {loginBusy ? '验证中…' : '进入系统'}
+              </button>
+            </>
+          )}
+          {!accessConfigured && authState !== 'checking' && (
+            <p className="access-error">
+              尚未配置 APP_ACCESS_CODE Worker 密钥。
+            </p>
+          )}
+          {loginError && <p className="access-error">{loginError}</p>}
+        </form>
+      </main>
+    );
 
   return (
     <div className="mail-workspace">
@@ -516,6 +868,17 @@ export default function Home() {
           <button
             className="btn"
             onClick={() => {
+              setHistoryLoading(true);
+              setHistoryError('');
+              setHistoryOpen(true);
+            }}
+          >
+            <History />
+            历史记录
+          </button>
+          <button
+            className="btn"
+            onClick={() => {
               setShopForm({ ...shop });
               setModalNotice('');
               setShopDialog(true);
@@ -534,6 +897,14 @@ export default function Home() {
             }}
           >
             <Settings2 />
+          </button>
+          <button
+            className="btn ghost icon-btn"
+            aria-label="退出登录"
+            title="退出登录"
+            onClick={() => void logout()}
+          >
+            <LogOut />
           </button>
         </div>
       </header>
@@ -858,11 +1229,11 @@ export default function Home() {
                     </span>
                     <button
                       className="btn primary copy-btn"
-                      disabled={dirty || stale || !!busy}
-                      onClick={() => void copy(selected.localized)}
+                      disabled={dirty || stale || !!busy || historySaving}
+                      onClick={() => void copyBuyerReply()}
                     >
                       <Copy />
-                      复制买家回复
+                      {historySaving ? '保存中…' : '复制买家回复'}
                     </button>
                   </div>
                 </>
@@ -892,6 +1263,110 @@ export default function Home() {
           </output>
         )}
       </main>
+      <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
+        <SheetContent className="history-sheet" side="right">
+          <SheetHeader className="history-head">
+            <SheetTitle>历史记录</SheetTitle>
+            <SheetDescription>
+              最近 60 天 · {historyRecords.length} 条
+            </SheetDescription>
+          </SheetHeader>
+          <div className="history-filters">
+            <label className="history-search">
+              <Search />
+              <input
+                aria-label="搜索历史记录"
+                value={historySearch}
+                onChange={(event) => setHistorySearch(event.target.value)}
+                placeholder="搜索邮件、单号或回复"
+              />
+            </label>
+            <div className="history-filter-row">
+              <select
+                aria-label="按店铺筛选"
+                value={historyShop}
+                onChange={(event) => setHistoryShop(event.target.value)}
+              >
+                <option value="all">全部店铺</option>
+                {shops.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                aria-label="按日期筛选"
+                type="date"
+                value={historyDate}
+                onChange={(event) => setHistoryDate(event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="history-list">
+            {historyLoading ? (
+              <div className="history-empty">正在读取…</div>
+            ) : historyError ? (
+              <div className="history-empty error">{historyError}</div>
+            ) : filteredHistory.length ? (
+              filteredHistory.map((record) => (
+                <article className="history-item" key={record.id}>
+                  <button
+                    className="history-restore"
+                    onClick={() => restoreHistory(record)}
+                  >
+                    <div className="history-item-top">
+                      <span className="history-shop">{record.shopName}</span>
+                      <time dateTime={new Date(record.createdAt).toISOString()}>
+                        {new Date(record.createdAt).toLocaleString('zh-CN', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </time>
+                    </div>
+                    <p>
+                      {record.buyerTranslation ||
+                        record.buyerMail ||
+                        record.customInstruction ||
+                        '仅回复内容'}
+                    </p>
+                    <div className="history-meta">
+                      <span>
+                        {languageNames[record.targetLanguage] ??
+                          record.targetLanguage}
+                      </span>
+                      {record.trackingNumber && (
+                        <span>{record.trackingNumber}</span>
+                      )}
+                      {record.action !== 'none' && (
+                        <span>
+                          {actionOptions.find(
+                            (item) => item.id === record.action,
+                          )?.title ?? record.action}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    className="history-delete"
+                    aria-label="删除这条历史记录"
+                    title="删除"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void deleteHistory(record);
+                    }}
+                  >
+                    <Trash2 />
+                  </button>
+                </article>
+              ))
+            ) : (
+              <div className="history-empty">没有符合条件的记录</div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
       <Dialog open={shopDialog} onOpenChange={setShopDialog}>
         <DialogContent className="workspace-modal">
           <DialogTitle>店铺管理</DialogTitle>
