@@ -6,11 +6,12 @@
 
 1. 创建一个 Workers KV namespace，并将其绑定为 `SHOP_TEMPLATES`。它保存店铺模板及接口地址、模型名称；邮件、物流和回复不会写入该 namespace。
 2. 将所选模型服务的 API Key 配置为 Worker Secret：`OPENAI_API_KEY`。前端永远不会收到该密钥。
-3. 如需启用 17TRACK 自动网页读取，创建一个最小权限的 Cloudflare API token，并配置以下 Worker Secrets：
-   - `CLOUDFLARE_ACCOUNT_ID`
-   - `BROWSER_RUN_API_TOKEN`
+3. 如需启用 17TRACK 自动网页读取，创建一个具有 **Browser Rendering Write** 权限的 Cloudflare API token，并配置：
+   - Worker 变量 `CLOUDFLARE_ACCOUNT_ID`：Cloudflare Account ID
+   - Worker 密钥 `BROWSER_RUN_API_TOKEN`：上一步创建的 API token
+4. 保存变量和密钥后重新部署当前版本。
 
-未配置 Browser Run 时，页面会打开 `https://t.17track.net/zh-cn?nums=单号` 并提示粘贴物流结果；后续分析与回复生成仍可用。
+自动读取失败、超时或未配置 Browser Run 时，页面会自动打开 `https://t.17track.net/zh-cn?nums=单号` 并提示粘贴物流结果；后续分析与回复生成仍可用。
 
 ## 自定义模型接口
 

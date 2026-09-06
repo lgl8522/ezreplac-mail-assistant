@@ -44,8 +44,14 @@ export async function GET(request: Request) {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url: fallbackUrl }),
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(25000)]),
+        body: JSON.stringify({
+          url: fallbackUrl,
+          gotoOptions: { waitUntil: 'networkidle2', timeout: 20000 },
+          waitForTimeout: 2500,
+          rejectResourceTypes: ['image', 'media', 'font'],
+          viewport: { width: 1440, height: 1000 },
+        }),
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(30000)]),
       },
     );
     const result = (await response.json()) as {

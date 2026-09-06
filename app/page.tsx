@@ -323,6 +323,20 @@ export default function Home() {
       setLogistics(cached.raw);
       return;
     }
+    const fallbackUrl = `https://t.17track.net/zh-cn?nums=${encodeURIComponent(number)}`;
+    const fallbackTab = window.open('', 'ezreplac-17track');
+    if (fallbackTab) {
+      fallbackTab.document.title = '物流查询中';
+      fallbackTab.document.body.textContent = '正在自动查询物流…';
+      fallbackTab.opener = null;
+    }
+    const openFallback = (url = fallbackUrl) => {
+      if (fallbackTab && !fallbackTab.closed) {
+        fallbackTab.location.replace(url);
+        return true;
+      }
+      return Boolean(window.open(url, '_blank', 'noopener,noreferrer'));
+    };
     trackAbort.current?.abort();
     const controller = new AbortController();
     trackAbort.current = controller;
@@ -338,15 +352,35 @@ export default function Home() {
         message?: string;
         fallbackUrl?: string;
       };
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        fallbackTab?.close();
+        return;
+      }
       if (result.raw) {
+        fallbackTab?.close();
         trackCache.current.set(number, { raw: result.raw, at: Date.now() });
         while (trackCache.current.size > 12)
           trackCache.current.delete(trackCache.current.keys().next().value!);
         setLogistics(result.raw);
-      } else setNotice(result.message ?? '请打开 17TRACK，粘贴查询结果。');
+      } else {
+        const opened = openFallback(result.fallbackUrl);
+        setNotice(
+          opened
+            ? '自动读取失败，请在已打开的 17TRACK 页面复制物流结果后粘贴。'
+            : (result.message ??
+                '自动读取失败，浏览器拦截了查询页，请点击“打开 17TRACK”。'),
+        );
+      }
     } catch (e) {
-      if (!cancelled(e)) setNotice('查询失败，可打开 17TRACK 后粘贴结果。');
+      if (cancelled(e)) fallbackTab?.close();
+      else {
+        const opened = openFallback();
+        setNotice(
+          opened
+            ? '查询失败，请在已打开的 17TRACK 页面复制物流结果后粘贴。'
+            : '查询失败，浏览器拦截了查询页，请点击“打开 17TRACK”。',
+        );
+      }
     } finally {
       if (trackAbort.current === controller) setTrackBusy(false);
     }
