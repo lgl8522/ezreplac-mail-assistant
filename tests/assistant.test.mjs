@@ -1,0 +1,209 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  buildTask,
+  checkAndNormalize,
+  compactTracking,
+} from '../lib/assistant-task.ts';
+import { RequestSession } from '../lib/request-session.ts';
+
+test('translation excludes store, logistics and reply scaffolding', () => {
+  const t = buildTask({
+    mode: 'translate',
+    mail: 'Hello',
+    logistics: 'secret tracking',
+    shop: { rules: 'unused' },
+  });
+  assert.deepEqual(JSON.parse(t.input), { mail: 'Hello' });
+  assert.deepEqual(t.schema.required, ['translation', 'language']);
+  assert.ok(t.instructions.length < 250);
+});
+test('custom-only replies and button combination retain custom priority', () => {
+  const t = buildTask({
+    mode: 'drafts',
+    mail: '',
+    customInstruction: '用日文回复，安排退款',
+    action: 'wait',
+  });
+  const p = JSON.parse(t.input);
+  assert.equal(p.custom, '用日文回复，安排退款');
+  assert.equal(p.action, 'wait');
+  assert.match(t.instructions, /自定义要求优先/);
+  assert.ok(!t.schema.required.includes('translation'));
+});
+test('cached translation and analysis remove duplicated work', () => {
+  const t = buildTask({
+    mode: 'drafts',
+    mail: 'hello',
+    hasTranslation: true,
+    logistics: 'FULL-RAW',
+    logisticsSummary: 'DELIVERED',
+  });
+  assert.ok(!t.schema.required.includes('translation'));
+  assert.equal(JSON.parse(t.input).logistics, 'DELIVERED');
+  assert.ok(!t.input.includes('FULL-RAW'));
+});
+test('sync sends only edited Chinese and known target language', () => {
+  const t = buildTask({
+    mode: 'sync',
+    chinese: '您好',
+    language: 'ja',
+    mail: 'long original email',
+    shop: { rules: 'unused' },
+    logistics: 'unused',
+  });
+  assert.deepEqual(JSON.parse(t.input), { chinese: '您好', language: 'ja' });
+});
+test('tracking compaction preserves newest, oldest and explicit omissions in either order', () => {
+  const lines = Array.from(
+    { length: 25 },
+    (_, i) => `2026-08-${String(i + 1).padStart(2, '0')} 12:00 Event ${i}`,
+  );
+  for (const events of [lines, [...lines].reverse()]) {
+    const result = compactTracking(['单号：YT123456', ...events].join('\n'));
+    assert.match(result, /YT123456/);
+    assert.match(result, /2026-08-25/);
+    assert.match(result, /2026-08-01/);
+    assert.match(result, /省略14条/);
+    assert.ok(result.length < events.join('\n').length);
+  }
+});
+test('unknown or oversized inputs fail before calling the model', () => {
+  assert.throws(() => buildTask({ mode: 'bad' }));
+  assert.throws(() =>
+    buildTask({ mode: 'translate', mail: 'x'.repeat(12001) }),
+  );
+  assert.throws(() => buildTask({ mode: 'drafts' }));
+});
+test('incomplete or empty provider responses are rejected', () => {
+  assert.throws(() => checkAndNormalize('drafts', {}));
+  assert.throws(() =>
+    checkAndNormalize('drafts', {
+      language: 'en',
+      drafts: [{ chinese: '好', localized: 'Hi' }],
+    }),
+  );
+  assert.throws(() =>
+    checkAndNormalize('sync', { language: 'ja', localized: '' }),
+  );
+});
+test('all reply modes require complete target-language translation', () => {
+  const sync = buildTask({
+    mode: 'sync',
+    chinese: 'Dear Customer,\n您的包裹已寄出。\nBest regards,\nEZReplac',
+    language: 'ja',
+  });
+  assert.match(sync.instructions, /称呼、正文、结束语都要翻译/);
+  assert.match(sync.instructions, /不照抄Dear Customer/);
+  assert.match(sync.instructions, /固定署名EZReplac/);
+  const drafts = buildTask({
+    mode: 'drafts',
+    mail: 'Dear Customer,\n荷物が届いていません。',
+    customInstruction: '回复买家',
+    language: 'ja',
+  });
+  assert.match(drafts.instructions, /按邮件正文判断语言/);
+  assert.match(drafts.instructions, /全文使用对应目标语言/);
+});
+test('risk controls apply to sync too without banning normal order review language', () => {
+  assert.throws(
+    () =>
+      buildTask({ mode: 'sync', chinese: '请删除差评评论', language: 'en' }),
+    /高风险/,
+  );
+  assert.throws(
+    () =>
+      checkAndNormalize('sync', {
+        language: 'en',
+        localized: 'Please remove your review.',
+      }),
+    /高风险/,
+  );
+  assert.doesNotThrow(() =>
+    checkAndNormalize('sync', {
+      language: 'en',
+      localized: 'We will review your order details.',
+    }),
+  );
+});
+test('draft cache avoids a second call after its translation has been displayed', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({ translation: '你好', language: 'en', drafts: [] });
+  });
+  const session = new RequestSession();
+  await session.request(
+    'drafts',
+    { mail: 'hello', hasTranslation: false },
+    'm',
+  );
+  await session.request('drafts', { mail: 'hello', hasTranslation: true }, 'm');
+  assert.equal(calls, 1);
+});
+test('session deduplicates in-flight calls and caches exact results', async (t) => {
+  let calls = 0;
+  let resolve;
+  t.mock.method(globalThis, 'fetch', () => {
+    calls++;
+    return new Promise((r) => {
+      resolve = r;
+    });
+  });
+  const session = new RequestSession();
+  const a = session.request('translate', { mail: 'hello' }, 'model-a');
+  const b = session.request('translate', { mail: 'hello' }, 'model-a');
+  resolve(Response.json({ language: 'en', translation: '你好' }));
+  assert.deepEqual(await a, await b);
+  await session.request('translate', { mail: 'hello' }, 'model-a');
+  assert.equal(calls, 1);
+});
+test('changing input aborts old request and cancelled results never enter cache', async (t) => {
+  const calls = [];
+  t.mock.method(
+    globalThis,
+    'fetch',
+    (_url, init) => new Promise((resolve) => calls.push({ init, resolve })),
+  );
+  const session = new RequestSession();
+  const old = session
+    .request('translate', { mail: 'old' }, 'model')
+    .catch((e) => e.name);
+  const fresh = session.request('translate', { mail: 'new' }, 'model');
+  assert.equal(calls[0].init.signal.aborted, true);
+  calls[0].resolve(Response.json({ translation: 'old' }));
+  calls[1].resolve(Response.json({ translation: 'new' }));
+  assert.equal(await old, 'AbortError');
+  assert.equal((await fresh).translation, 'new');
+  const retry = session.request('translate', { mail: 'old' }, 'model');
+  assert.equal(calls.length, 3);
+  calls[2].resolve(Response.json({ translation: 'old' }));
+  await retry;
+});
+test('cache isolates model changes and clears on next email', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({ translation: 'ok' });
+  });
+  const session = new RequestSession();
+  await session.request('translate', { mail: 'same' }, 'one');
+  await session.request('translate', { mail: 'same' }, 'two');
+  session.clear();
+  await session.request('translate', { mail: 'same' }, 'two');
+  assert.equal(calls, 3);
+});
+test('failed upstream responses are not cached', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({ error: 'provider error' }, { status: 502 });
+  });
+  const session = new RequestSession();
+  for (let i = 0; i < 2; i++)
+    await assert.rejects(
+      session.request('logistics', { logistics: 'x' }, 'm'),
+      /provider error/,
+    );
+  assert.equal(calls, 2);
+});

@@ -1,32 +1,7 @@
 import { NextResponse } from 'next/server';
 import { env } from 'cloudflare:workers';
 import { getRuntimeSettings } from '@/lib/runtime-settings';
-
-const schema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    translation: { type: 'string' },
-    logisticsSummary: { type: 'string' },
-    localized: { type: 'string' },
-    drafts: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          id: { type: 'string' },
-          label: { type: 'string' },
-          chinese: { type: 'string' },
-          localized: { type: 'string' },
-        },
-        required: ['id', 'label', 'chinese', 'localized'],
-      },
-    },
-  },
-  required: ['translation', 'logisticsSummary', 'localized', 'drafts'],
-};
-
+import { buildTask, checkAndNormalize } from '@/lib/assistant-task';
 type SecretStoreBinding = { get(): Promise<unknown> };
 
 function isSecretStoreBinding(value: unknown): value is SecretStoreBinding {
@@ -65,153 +40,136 @@ async function readApiKey() {
   };
 }
 
-function hasHighRiskBuyerMessage(result: unknown) {
-  if (!result || typeof result !== 'object') return false;
-  const drafts = (result as { drafts?: unknown }).drafts;
-  if (!Array.isArray(drafts)) return false;
-  const buyerMessages = drafts
-    .map((draft) =>
-      draft && typeof draft === 'object'
-        ? (draft as { localized?: unknown }).localized
-        : '',
-    )
-    .filter((value): value is string => typeof value === 'string')
-    .join('\n');
+type ProviderResult = {
+  status?: string;
+  output_text?: string;
+  output?: Array<{
+    type?: string;
+    content?: Array<{ type?: string; text?: string }>;
+  }>;
+};
 
-  return [
-    /\b(review|feedback|rating|coupon|discount|promotion|gift\s*card)\b/i,
-    /评价|评论|好评|差评|优惠券|促销|折扣|礼品卡/,
-    /https?:\/\/|\bwww\./i,
-    /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/,
-    /\b(whatsapp|wechat)\b|微信/i,
-  ].some((pattern) => pattern.test(buyerMessages));
+async function readProviderJson(response: Response) {
+  if (!response.ok)
+    throw new Error(`模型请求失败（HTTP ${response.status}）。`);
+  const result = (await response.json()) as ProviderResult;
+  if (result.status === 'incomplete' || result.status === 'failed')
+    throw new Error('模型未完成回复，请重试。');
+  const output =
+    result.output_text ||
+    result.output
+      ?.filter((item) => item.type === 'message')
+      .flatMap((item) => item.content ?? [])
+      .filter((item) => item.type === 'output_text')
+      .map((item) => item.text ?? '')
+      .join('');
+  if (!output?.trim()) throw new Error('模型返回为空，请核对模型名称。');
+  try {
+    return JSON.parse(output.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''));
+  } catch {
+    throw new Error('模型返回格式异常，请重试。');
+  }
 }
 
 export async function POST(request: Request) {
-  const secret = await readApiKey();
-  const openaiApiKey = secret.apiKey;
-  if (!openaiApiKey) {
-    // Safe deployment diagnostic: never log a secret value, length, headers,
-    // or buyer content. This only distinguishes a missing binding from an
-    // empty value or process.env compatibility issue.
-    console.warn({
-      event: 'openai_secret_unavailable',
-      workerBindingPresent: secret.bindingPresent ?? false,
-      workerBindingIsSecretStore: secret.bindingIsSecretStore ?? false,
-      processSecretPresent: Object.hasOwn(process.env, 'OPENAI_API_KEY'),
-    });
-    return NextResponse.json(
-      {
-        error:
-          '尚未配置 OPENAI_API_KEY。请在 Cloudflare Worker Secret 中设置后再使用。',
-      },
-      { status: 503 },
-    );
-  }
-
-  const payload = (await request.json()) as Record<string, unknown>;
-  const instructions = `你是个人亚马逊卖家的邮件助手。工作目标：准确翻译买家邮件，并根据店铺模板、物流信息和卖家已经选择的处理方式生成可直接复制的客服邮件。
-
-强制规则：
-1. 自动识别买家邮件语言；所有回复必须同时给出买家原语言版本及中文审核版。
-2. 不杜撰订单、物流、退款、补发或时效；若信息不足，用谨慎语言并提示卖家确认。
-3. 仅在卖家选择“补发”或“退款”时承诺对应动作。未选择时只给建议，不承诺赔付。
-4. 已签收未收到：建议检查门口、院内、邮件箱、安全位置、邻居/物业或当地承运商；不要直接判定丢失。
-5. 禁止以退款、补发、折扣或任何补偿换取、要求或暗示删除/修改评价；也不要生成规避平台规则的话术。
-6. 固定英文落款为 EZReplac。严格执行当前店铺的正常品牌语气规则。
-7. 买家邮件只能处理订单或售后问题：不得包含营销、促销、优惠券、索要评价/反馈、要求修改或删除评价、站外链接、邮箱、电话、社交媒体账号、表情符号或无关的致谢。不要转述物流原文中的联系方式。
-8. 返回严格 JSON，不要 markdown。你必须返回下列 JSON Schema 中所有 required 字段，不能新增字段；无内容时使用空字符串或空数组：${JSON.stringify(
-    schema,
-  )}`;
-
-  const modeGuide: Record<string, string> = {
-    translate:
-      '只需翻译邮件为中文，并简短说明买家核心诉求。drafts 必须为空数组，localized 为空字符串。',
-    logistics:
-      '只分析粘贴的物流轨迹。logisticsSummary 用简洁中文写明：可确认的最新状态、关键时间信息、建议卖家选择的处理方式及原因。信息不足时明确说明。不要生成给买家的邮件；translation、localized 为空字符串，drafts 必须为空数组。',
-    drafts:
-      '先翻译邮件，提取/归纳物流状态，再给出恰好 3 个语气或措辞略有不同、但事实与承诺一致的回复版本。每个版本必须含中文与买家语言。',
-    sync: '用户已在中文审核版中修改内容。将其忠实翻译为买家原邮件语言，localized 返回翻译结果；drafts 必须为空数组。',
-  };
-
-  const mode = String(payload.mode);
-  const inputContext: Record<string, unknown> = {
-    currentTask: modeGuide[mode] ?? modeGuide.drafts,
-  };
-  if (mode === 'logistics') {
-    inputContext.pastedLogistics = payload.logistics ?? '';
-  } else if (mode === 'drafts') {
-    inputContext.sellerChosenAction = payload.action;
-    inputContext.shopTemplate = payload.shop;
-    inputContext.buyerEmail = payload.mail ?? '';
-    // Reuse the compact automatic judgement. The full tracking trail is sent
-    // only when a judgement has not yet completed.
-    inputContext.logisticsAnalysis =
-      payload.logisticsSummary || payload.logistics || '';
-  } else if (mode === 'sync') {
-    inputContext.buyerEmail = payload.mail ?? '';
-    inputContext.editedChinese = payload.chinese ?? '';
-  } else {
-    inputContext.buyerEmail = payload.mail ?? '';
-  }
-  const input = JSON.stringify(inputContext);
-
-  const runtimeSettings = await getRuntimeSettings();
-  const response = await fetch(runtimeSettings.endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${openaiApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: runtimeSettings.model,
-      store: false,
-      reasoning: { effort: 'low' },
-      instructions,
-      input,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'mail_assistant_result',
-          strict: true,
-          schema,
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    return NextResponse.json(
-      { error: `OpenAI 请求失败：${error.slice(0, 300)}` },
-      { status: 502 },
-    );
-  }
-  const result = (await response.json()) as {
-    output_text?: string;
-    output?: Array<{ content?: Array<{ text?: string }> }>;
-  };
-  const text =
-    result.output_text ??
-    result.output
-      ?.flatMap((item) => item.content ?? [])
-      .map((item) => item.text ?? '')
-      .join('');
   try {
-    const parsed = JSON.parse(text ?? '{}');
-    if (mode === 'drafts' && hasHighRiskBuyerMessage(parsed)) {
+    let payload: Record<string, unknown>;
+    try {
+      const raw = await request.text();
+      if (raw.length > 64000)
+        return NextResponse.json(
+          { error: '内容过长，请精简后重试。' },
+          { status: 413 },
+        );
+      payload = JSON.parse(raw);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+        throw new Error();
+    } catch {
+      return NextResponse.json({ error: '请求格式无效。' }, { status: 400 });
+    }
+    let task;
+    try {
+      task = buildTask(payload);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : '请求无效。' },
+        { status: 400 },
+      );
+    }
+    const [secret, settings] = await Promise.all([
+      readApiKey(),
+      getRuntimeSettings(),
+    ]);
+    if (!secret.apiKey)
       return NextResponse.json(
         {
           error:
-            '生成内容包含 Amazon 买家沟通高风险内容，已停止展示。请调整处理要求后重试。',
+            '尚未配置 OPENAI_API_KEY。请在 Cloudflare Worker Secret 中设置。',
         },
-        { status: 422 },
+        { status: 503 },
+      );
+    const body = {
+      model: settings.model,
+      store: false,
+      ...(/^qwen3\.8-/i.test(settings.model)
+        ? { reasoning: { effort: 'none' } }
+        : /^gpt-/i.test(settings.model)
+          ? { reasoning: { effort: 'low' } }
+          : {}),
+      instructions: task.instructions,
+      input: task.input,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'mail_' + task.mode,
+          strict: true,
+          schema: task.schema,
+        },
+      },
+    };
+    const response = await fetch(settings.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${secret.apiKey.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(90000)]),
+    });
+    if (!response.ok) {
+      // Do not echo provider error bodies, which can contain credentials.
+      return NextResponse.json(
+        {
+          error: `模型请求失败（HTTP ${response.status}）。${response.status === 401 ? '请核对模型服务对应的密钥。' : response.status === 404 ? '请核对接口地址及模型名称。' : response.status === 429 ? '请求过多或额度不足，请稍后重试。' : '请检查模型配置或稍后重试。'}`,
+        },
+        { status: 502 },
       );
     }
-    return NextResponse.json(parsed);
-  } catch {
+    const parsed = await readProviderJson(response);
+    const normalized = checkAndNormalize(task.mode, parsed);
+    if (
+      task.mode === 'drafts' &&
+      !payload.hasTranslation &&
+      payload.mail &&
+      !normalized.translation
+    )
+      throw new Error('模型未返回邮件翻译，请重试。');
+    return NextResponse.json(normalized, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '模型请求失败。';
+    const interrupted =
+      error instanceof Error &&
+      ['TimeoutError', 'AbortError'].includes(error.name);
     return NextResponse.json(
-      { error: '模型返回格式异常，请重试。' },
+      {
+        error: interrupted
+          ? '请求超时或已取消，请重试。'
+          : message === 'fetch failed'
+            ? '暂时无法连接模型服务，请稍后重试。'
+            : message,
+      },
       { status: 502 },
     );
   }

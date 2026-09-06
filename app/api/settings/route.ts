@@ -7,7 +7,9 @@ import {
 } from '@/lib/runtime-settings';
 
 export async function GET() {
-  return NextResponse.json(await getRuntimeSettings());
+  return NextResponse.json(await getRuntimeSettings(), {
+    headers: { 'Cache-Control': 'no-store' },
+  });
 }
 
 export async function PUT(request: Request) {

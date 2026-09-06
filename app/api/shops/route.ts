@@ -1,17 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getSettingsStore } from '@/lib/runtime-settings';
+import { defaultShop as shopDefaults } from '@/lib/assistant-task';
 
-const defaultShop = [
-  {
-    id: 'ezreplac',
-    name: 'EZReplac · 默认店铺',
-    tone: '亲和、诚恳、专业',
-    length: '简洁，3–5 个短段落',
-    greeting: '使用 Dear + 买家姓名；姓名未知时使用 Dear Customer',
-    rules:
-      '先表达理解，再给出清晰下一步。不得以补偿交换评价或要求移除评价。固定落款：EZReplac。',
-  },
-];
+const defaultShop = [shopDefaults];
 
 export async function GET() {
   const store = getSettingsStore();
