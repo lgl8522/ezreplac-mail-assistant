@@ -123,6 +123,7 @@ export default function Home() {
   const [language, setLanguage] = useState('auto');
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [version, setVersion] = useState(0);
+  const [historyReply, setHistoryReply] = useState(false);
   const [edits, setEdits] = useState<Record<number, string>>({});
   const [draftLanguage, setDraftLanguage] = useState('en');
   const [draftSource, setDraftSource] = useState('');
@@ -402,6 +403,7 @@ export default function Home() {
       if (id !== job.current || latest.current.source !== snapshot) return;
       setDrafts(r.drafts ?? []);
       setVersion(0);
+      setHistoryReply(false);
       setEdits({});
       setDraftLanguage(r.language ?? 'en');
       setDraftSource(snapshot);
@@ -540,6 +542,7 @@ export default function Home() {
     setDrafts([]);
     setEdits({});
     setVersion(0);
+    setHistoryReply(false);
     setDraftSource('');
     setBusy(null);
     setNotice('');
@@ -665,6 +668,7 @@ export default function Home() {
       },
     ]);
     setVersion(0);
+    setHistoryReply(true);
     setEdits({});
     setDraftLanguage(restoredLanguage);
     setDraftSource(restoredSource);
@@ -1132,21 +1136,37 @@ export default function Home() {
                     {stale ? '要求已变更' : selected ? '待审核' : '等待生成'}
                   </span>
                 </div>
-                <div className="tabs" role="tablist" aria-label="回复版本">
-                  {['简洁', '亲和', '正式'].map((label, i) => (
+                <div
+                  className={'tabs' + (historyReply ? ' single' : '')}
+                  role="tablist"
+                  aria-label="回复版本"
+                >
+                  {historyReply ? (
                     <button
-                      className={'tab' + (version === i ? ' active' : '')}
+                      className="tab active"
                       role="tab"
-                      aria-selected={version === i}
+                      aria-selected="true"
                       aria-controls="reply-panel"
-                      id={'reply-tab-' + i}
-                      disabled={!drafts[i]}
-                      key={label}
-                      onClick={() => setVersion(i)}
+                      id="reply-tab-history"
                     >
-                      版本 0{i + 1} <span>{label}</span>
+                      最终复制版本
                     </button>
-                  ))}
+                  ) : (
+                    ['简洁', '亲和', '正式'].map((label, i) => (
+                      <button
+                        className={'tab' + (version === i ? ' active' : '')}
+                        role="tab"
+                        aria-selected={version === i}
+                        aria-controls="reply-panel"
+                        id={'reply-tab-' + i}
+                        disabled={!drafts[i]}
+                        key={label}
+                        onClick={() => setVersion(i)}
+                      >
+                        版本 0{i + 1} <span>{label}</span>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
               {selected ? (
@@ -1155,7 +1175,11 @@ export default function Home() {
                     className="reply-body"
                     id="reply-panel"
                     role="tabpanel"
-                    aria-labelledby={'reply-tab-' + version}
+                    aria-labelledby={
+                      historyReply
+                        ? 'reply-tab-history'
+                        : 'reply-tab-' + version
+                    }
                   >
                     <div>
                       <div className="editor-label">
