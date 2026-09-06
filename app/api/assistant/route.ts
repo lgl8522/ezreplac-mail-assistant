@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { env } from 'cloudflare:workers';
 import { getRuntimeSettings } from '@/lib/runtime-settings';
-import { buildTask, checkAndNormalize } from '@/lib/assistant-task';
+import {
+  buildLocalizationTask,
+  buildTask,
+  checkAndNormalize,
+  checkAndNormalizeLocalization,
+} from '@/lib/assistant-task';
 type SecretStoreBinding = { get(): Promise<unknown> };
 
 function isSecretStoreBinding(value: unknown): value is SecretStoreBinding {
@@ -71,6 +76,52 @@ async function readProviderJson(response: Response) {
   }
 }
 
+type ModelTask =
+  | ReturnType<typeof buildTask>
+  | ReturnType<typeof buildLocalizationTask>;
+type RuntimeSettings = Awaited<ReturnType<typeof getRuntimeSettings>>;
+
+async function requestProvider(
+  task: ModelTask,
+  settings: RuntimeSettings,
+  apiKey: string,
+  signal: AbortSignal,
+) {
+  const body = {
+    model: settings.model,
+    store: false,
+    ...(/^qwen3\.8-/i.test(settings.model)
+      ? { reasoning: { effort: 'none' } }
+      : /^gpt-/i.test(settings.model)
+        ? { reasoning: { effort: 'low' } }
+        : {}),
+    instructions: task.instructions,
+    input: task.input,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'mail_' + task.mode,
+        strict: true,
+        schema: task.schema,
+      },
+    },
+  };
+  const response = await fetch(settings.endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
+  });
+  if (!response.ok)
+    throw new Error(
+      `模型请求失败（HTTP ${response.status}）。${response.status === 401 ? '请核对模型服务对应的密钥。' : response.status === 404 ? '请核对接口地址及模型名称。' : response.status === 429 ? '请求过多或额度不足，请稍后重试。' : '请检查模型配置或稍后重试。'}`,
+    );
+  return readProviderJson(response);
+}
+
 export async function POST(request: Request) {
   try {
     let payload: Record<string, unknown>;
@@ -108,44 +159,12 @@ export async function POST(request: Request) {
         },
         { status: 503 },
       );
-    const body = {
-      model: settings.model,
-      store: false,
-      ...(/^qwen3\.8-/i.test(settings.model)
-        ? { reasoning: { effort: 'none' } }
-        : /^gpt-/i.test(settings.model)
-          ? { reasoning: { effort: 'low' } }
-          : {}),
-      instructions: task.instructions,
-      input: task.input,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'mail_' + task.mode,
-          strict: true,
-          schema: task.schema,
-        },
-      },
-    };
-    const response = await fetch(settings.endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${secret.apiKey.trim()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(90000)]),
-    });
-    if (!response.ok) {
-      // Do not echo provider error bodies, which can contain credentials.
-      return NextResponse.json(
-        {
-          error: `模型请求失败（HTTP ${response.status}）。${response.status === 401 ? '请核对模型服务对应的密钥。' : response.status === 404 ? '请核对接口地址及模型名称。' : response.status === 429 ? '请求过多或额度不足，请稍后重试。' : '请检查模型配置或稍后重试。'}`,
-        },
-        { status: 502 },
-      );
-    }
-    const parsed = await readProviderJson(response);
+    const parsed = await requestProvider(
+      task,
+      settings,
+      secret.apiKey,
+      request.signal,
+    );
     const normalized = checkAndNormalize(task.mode, parsed);
     if (
       task.mode === 'drafts' &&
@@ -154,6 +173,27 @@ export async function POST(request: Request) {
       !normalized.translation
     )
       throw new Error('模型未返回邮件翻译，请重试。');
+    if (task.mode === 'drafts' && normalized.drafts) {
+      const chineseDrafts = normalized.drafts.map((draft) => draft.chinese);
+      const localizationTask = buildLocalizationTask(
+        chineseDrafts,
+        normalized.language ?? 'en',
+      );
+      const localization = await requestProvider(
+        localizationTask,
+        settings,
+        secret.apiKey,
+        request.signal,
+      );
+      const localizedDrafts = checkAndNormalizeLocalization(
+        localization,
+        chineseDrafts,
+      );
+      normalized.drafts = chineseDrafts.map((chinese, index) => ({
+        chinese,
+        localized: localizedDrafts[index],
+      }));
+    }
     return NextResponse.json(normalized, {
       headers: { 'Cache-Control': 'no-store' },
     });

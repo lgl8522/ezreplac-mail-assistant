@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildLocalizationTask,
   buildTask,
   checkAndNormalize,
+  checkAndNormalizeLocalization,
   compactTracking,
 } from '../lib/assistant-task.ts';
 import { RequestSession } from '../lib/request-session.ts';
@@ -87,7 +89,7 @@ test('incomplete or empty provider responses are rejected', () => {
     checkAndNormalize('sync', { language: 'ja', localized: '' }),
   );
 });
-test('all reply modes require complete target-language translation', () => {
+test('draft creation and localization are separate strict steps', () => {
   const sync = buildTask({
     mode: 'sync',
     chinese: 'Dear Customer,\n您的包裹已寄出。\nBest regards,\nEZReplac',
@@ -102,8 +104,51 @@ test('all reply modes require complete target-language translation', () => {
     customInstruction: '回复买家',
     language: 'ja',
   });
-  assert.match(drafts.instructions, /按邮件正文判断语言/);
-  assert.match(drafts.instructions, /全文使用对应目标语言/);
+  assert.match(drafts.instructions, /按邮件正文判断目标语言/);
+  assert.match(drafts.instructions, /只写完整中文/);
+  assert.deepEqual(drafts.schema.properties.drafts.items.required, ['chinese']);
+
+  const chineseDrafts = [
+    '您好，退款金额为10美元。\nEZReplac',
+    '您好，包裹单号YT123456仍在运输。\nEZReplac',
+    '您好，请等待3天。\nEZReplac',
+  ];
+  const generated = checkAndNormalize('drafts', {
+    language: 'ja',
+    drafts: chineseDrafts.map((chinese) => ({ chinese })),
+  });
+  assert.deepEqual(
+    generated.drafts.map((draft) => draft.localized),
+    ['', '', ''],
+  );
+  const localization = buildLocalizationTask(chineseDrafts, 'ja');
+  assert.deepEqual(JSON.parse(localization.input), {
+    language: 'ja',
+    drafts: chineseDrafts,
+  });
+  assert.match(
+    localization.instructions,
+    /不重新创作、不润色、不概括、不增删信息/,
+  );
+  const localized = checkAndNormalizeLocalization(
+    {
+      localized: [
+        'こんにちは、返金額は10ドルです。\nEZReplac',
+        'こんにちは、荷物番号YT123456はまだ輸送中です。\nEZReplac',
+        'こんにちは、3日間お待ちください。\nEZReplac',
+      ],
+    },
+    chineseDrafts,
+  );
+  assert.equal(localized.length, 3);
+  assert.throws(
+    () =>
+      checkAndNormalizeLocalization(
+        { localized: ['こんにちは', 'こんにちは', 'こんにちは'] },
+        chineseDrafts,
+      ),
+    /未保留数字、单号或署名/,
+  );
 });
 test('risk controls apply to sync too without banning normal order review language', () => {
   assert.throws(
