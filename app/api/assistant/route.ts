@@ -92,7 +92,12 @@ function parseJsonOutput(value: string) {
 async function readProviderJson(response: Response) {
   if (!response.ok)
     throw new Error(`模型请求失败（HTTP ${response.status}）。`);
-  const result = (await response.json()) as ProviderResult;
+  let result: ProviderResult;
+  try {
+    result = (await response.json()) as ProviderResult;
+  } catch {
+    throw new Error(MODEL_FORMAT_ERROR);
+  }
   if (result.status === 'incomplete' || result.status === 'failed')
     throw new Error('模型未完成回复，请重试。');
   const output =
@@ -211,15 +216,16 @@ export async function POST(request: Request) {
         secret.apiKey,
         request.signal,
       );
-      return checkAndNormalize(task.mode, parsed, sourceMail);
+      const result = checkAndNormalize(task.mode, parsed, sourceMail);
+      if (
+        task.mode === 'drafts' &&
+        !payload.hasTranslation &&
+        payload.mail &&
+        !result.translation
+      )
+        throw new Error('模型未返回邮件翻译，请重试。');
+      return result;
     });
-    if (
-      task.mode === 'drafts' &&
-      !payload.hasTranslation &&
-      payload.mail &&
-      !normalized.translation
-    )
-      throw new Error('模型未返回邮件翻译，请重试。');
     if (task.mode === 'drafts' && normalized.drafts) {
       const chineseDrafts = normalized.drafts.map((draft) => draft.chinese);
       const localizationTask = buildLocalizationTask(

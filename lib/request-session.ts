@@ -30,13 +30,14 @@ export class RequestSession {
     mode: Mode,
     payload: Record<string, unknown>,
     modelKey: string,
+    options: { bypassCache?: boolean } = {},
   ): Promise<AssistantResult> {
     // Reusing an existing draft with its translation also satisfies a later
     // request that does not need that translation again.
     const keyPayload =
       mode === 'drafts' ? { ...payload, hasTranslation: false } : payload;
     const key = JSON.stringify([modelKey, mode, keyPayload]);
-    const cached = this.cache.get(key);
+    const cached = options.bypassCache ? undefined : this.cache.get(key);
     if (
       cached &&
       Date.now() - cached.at < 15 * 60_000 &&

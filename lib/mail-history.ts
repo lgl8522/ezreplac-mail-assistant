@@ -14,6 +14,18 @@ export type MailHistoryRecord = {
   chineseReply: string;
   localizedReply: string;
   targetLanguage: string;
+  buyerLanguage: string;
 };
 
 export type NewMailHistoryRecord = Omit<MailHistoryRecord, 'createdAt'>;
+
+export type MailHistorySummary = Pick<
+  MailHistoryRecord,
+  | 'id'
+  | 'createdAt'
+  | 'shopId'
+  | 'shopName'
+  | 'trackingNumber'
+  | 'action'
+  | 'targetLanguage'
+> & { preview: string };

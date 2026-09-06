@@ -20,6 +20,7 @@ export const mailHistory = sqliteTable(
     chineseReply: text('chinese_reply').notNull(),
     localizedReply: text('localized_reply').notNull(),
     targetLanguage: text('target_language').notNull(),
+    buyerLanguage: text('buyer_language').notNull().default(''),
   },
   (table) => [
     index('mail_history_created_at_idx').on(table.createdAt),

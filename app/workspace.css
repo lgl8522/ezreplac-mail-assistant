@@ -370,6 +370,7 @@
     color: #626976;
     line-height: 1.9;
     margin: 0;
+    white-space: pre-wrap;
   }
   .tracking-input {
     display: flex;
@@ -1287,6 +1288,32 @@
 }
 .history-empty.error {
   color: #b35f5f;
+}
+.history-inline-error {
+  margin-bottom: 9px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff0f0;
+  color: #b35f5f;
+  font-size: 11px;
+}
+.history-more {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #dde2eb;
+  border-radius: 9px;
+  background: #fff;
+  color: #687284;
+  font-size: 11px;
+  cursor: pointer;
+}
+.history-more:hover:not(:disabled) {
+  border-color: #bcd0f4;
+  color: #216bf3;
+}
+.history-more:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 @media (max-width: 520px) {
   .history-sheet {

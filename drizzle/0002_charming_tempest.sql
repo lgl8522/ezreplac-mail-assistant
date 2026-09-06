@@ -1,0 +1,1 @@
+ALTER TABLE `mail_history` ADD `buyer_language` text DEFAULT '' NOT NULL;

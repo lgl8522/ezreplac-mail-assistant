@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -49,7 +48,7 @@ import {
   type Mode,
 } from '@/lib/assistant-task';
 import { RequestSession } from '@/lib/request-session';
-import type { MailHistoryRecord } from '@/lib/mail-history';
+import type { MailHistoryRecord, MailHistorySummary } from '@/lib/mail-history';
 import './workspace.css';
 
 type Settings = { endpoint: string; model: string };
@@ -70,10 +69,14 @@ function message(error: unknown) {
 function cancelled(error: unknown) {
   return error instanceof Error && error.name === 'AbortError';
 }
-function dateFilterValue(timestamp: number) {
-  const date = new Date(timestamp);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+function historyDateRange(value: string) {
+  const parts = value.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part)))
+    return null;
+  const [year, month, day] = parts;
+  const from = new Date(year, month - 1, day).getTime();
+  const to = new Date(year, month - 1, day + 1).getTime();
+  return Number.isFinite(from) && Number.isFinite(to) ? { from, to } : null;
 }
 function sourceKey(
   mail: string,
@@ -129,7 +132,7 @@ export default function Home() {
   const [draftSource, setDraftSource] = useState('');
   const [busyTask, setBusyTask] = useState<{
     mode: Mode;
-    source: string;
+    key: string;
   } | null>(null);
   const [notice, setNotice] = useState('');
   const [settings, setSettings] = useState<Settings>(defaults);
@@ -138,8 +141,14 @@ export default function Home() {
   const [shopDialog, setShopDialog] = useState(false);
   const [modelDialog, setModelDialog] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyRecords, setHistoryRecords] = useState<MailHistoryRecord[]>([]);
+  const [historyRecords, setHistoryRecords] = useState<MailHistorySummary[]>(
+    [],
+  );
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyRestoring, setHistoryRestoring] = useState('');
   const [historySaving, setHistorySaving] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [historySearch, setHistorySearch] = useState('');
@@ -153,7 +162,8 @@ export default function Home() {
   );
   const trackAbort = useRef<AbortController | null>(null);
   const trackCache = useRef(new Map<string, { raw: string; at: number }>());
-  const job = useRef(0);
+  const jobs = useRef({ translate: 0, drafts: 0, sync: 0 });
+  const historyJob = useRef(0);
   const source = sourceKey(
     mail,
     logistics,
@@ -173,10 +183,6 @@ export default function Home() {
   useLayoutEffect(() => {
     analysisRef.current = analysis;
   }, [analysis]);
-  const busy = busyTask?.source === source ? busyTask.mode : null;
-  function setBusy(mode: Mode | null) {
-    setBusyTask(mode ? { mode, source } : null);
-  }
   const logisticsBusy = !!logistics.trim() && analyzingRaw === logistics.trim();
   const logisticsError =
     analysisError?.raw === logistics.trim() ? analysisError.message : '';
@@ -189,26 +195,15 @@ export default function Home() {
   const detected =
     currentTranslation?.language || (mail.match(/[\u3040-\u30ff]/) ? 'ja' : '');
   const target = language === 'auto' ? detected || 'auto' : language;
-  const filteredHistory = useMemo(() => {
-    const query = historySearch.trim().toLocaleLowerCase();
-    return historyRecords.filter((record) => {
-      if (historyShop !== 'all' && record.shopId !== historyShop) return false;
-      if (historyDate && dateFilterValue(record.createdAt) !== historyDate)
-        return false;
-      if (!query) return true;
-      return [
-        record.shopName,
-        record.buyerMail,
-        record.buyerTranslation,
-        record.trackingNumber,
-        record.logisticsSummary,
-        record.customInstruction,
-        record.chineseReply,
-        record.localizedReply,
-      ].some((value) => value.toLocaleLowerCase().includes(query));
-    });
-  }, [historyDate, historyRecords, historySearch, historyShop]);
-
+  const busy =
+    busyTask && busyTask.key === (busyTask.mode === 'translate' ? mail : source)
+      ? busyTask.mode
+      : null;
+  function setBusy(mode: Mode | null) {
+    setBusyTask(
+      mode ? { mode, key: mode === 'translate' ? mail : source } : null,
+    );
+  }
   const apiFetch = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await fetch(input, init);
@@ -282,11 +277,13 @@ export default function Home() {
   }, [apiFetch, authState, requests]);
   useEffect(() => {
     // Invalidate all reply work on context changes, independently of logistics.
-    job.current++;
+    jobs.current.drafts++;
+    jobs.current.sync++;
     requests.cancel('drafts');
     requests.cancel('sync');
   }, [source, requests]);
   useEffect(() => {
+    jobs.current.translate++;
     requests.cancel('translate');
   }, [mail, requests]);
   useEffect(() => {
@@ -294,28 +291,56 @@ export default function Home() {
   }, [trackingNumber]);
   useEffect(() => {
     if (!historyOpen) return;
+    const id = ++historyJob.current;
     const controller = new AbortController();
-    void fetch('/api/history', {
-      signal: controller.signal,
-      cache: 'no-store',
-    })
-      .then(async (response) => {
-        if (response.status === 401) setAuthState('locked');
-        const result = (await response.json()) as {
-          records?: MailHistoryRecord[];
-          error?: string;
-        };
-        if (!response.ok) throw Error(result.error ?? '历史记录读取失败。');
-        setHistoryRecords(result.records ?? []);
-      })
-      .catch((error) => {
-        if (!cancelled(error)) setHistoryError(message(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setHistoryLoading(false);
-      });
-    return () => controller.abort();
-  }, [historyOpen]);
+    const timer = window.setTimeout(
+      () => {
+        const params = new URLSearchParams({ page: '0' });
+        if (historyShop !== 'all') params.set('shopId', historyShop);
+        if (historySearch.trim()) params.set('query', historySearch.trim());
+        const range = historyDateRange(historyDate);
+        if (range) {
+          params.set('from', String(range.from));
+          params.set('to', String(range.to));
+        }
+        setHistoryLoading(true);
+        setHistoryLoadingMore(false);
+        setHistoryRecords([]);
+        setHistoryHasMore(false);
+        setHistoryError('');
+        void apiFetch('/api/history?' + params.toString(), {
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+          .then(async (response) => {
+            const result = (await response.json()) as {
+              records?: MailHistorySummary[];
+              hasMore?: boolean;
+              error?: string;
+            };
+            if (!response.ok) throw Error(result.error ?? '历史记录读取失败。');
+            if (id === historyJob.current) {
+              setHistoryRecords(result.records ?? []);
+              setHistoryHasMore(Boolean(result.hasMore));
+              setHistoryPage(0);
+            }
+          })
+          .catch((error) => {
+            if (!cancelled(error) && id === historyJob.current)
+              setHistoryError(message(error));
+          })
+          .finally(() => {
+            if (!controller.signal.aborted && id === historyJob.current)
+              setHistoryLoading(false);
+          });
+      },
+      historySearch.trim() ? 250 : 0,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [apiFetch, historyDate, historyOpen, historySearch, historyShop]);
   const analyze = useCallback(
     async (raw: string): Promise<Analysis | null> => {
       if (!raw) return null;
@@ -357,36 +382,38 @@ export default function Home() {
   }, [logistics, configured, analyze, requests]);
   async function translate() {
     if (!mail.trim() || busy || !configured) return;
-    const id = ++job.current;
+    const id = ++jobs.current.translate;
     const snapshot = mail;
     setBusy('translate');
     setNotice('');
     try {
       const r = await requests.request('translate', { mail }, modelKey);
-      if (id === job.current && latest.current.mail === snapshot)
+      if (id === jobs.current.translate && latest.current.mail === snapshot)
         setTranslation({
           mail: snapshot,
           text: r.translation ?? '',
           language: r.language ?? '',
         });
     } catch (e) {
-      if (!cancelled(e) && id === job.current) setNotice(message(e));
+      if (!cancelled(e) && id === jobs.current.translate) setNotice(message(e));
     } finally {
-      if (id === job.current) setBusy(null);
+      if (id === jobs.current.translate) setBusy(null);
     }
   }
   async function generate() {
     if (busy || !configured) return;
     if (!mail.trim() && !logistics.trim() && !custom.trim())
       return setNotice('请输入邮件、物流或自定义要求。');
-    const id = ++job.current;
+    const id = ++jobs.current.drafts;
     const snapshot = source;
+    const regenerate = drafts.length > 0;
     setBusy('drafts');
     setNotice('');
     try {
       // Share the pending automatic analysis, including clicks during debounce.
       const judgement = await analyze(logistics.trim());
-      if (id !== job.current || latest.current.source !== snapshot) return;
+      if (id !== jobs.current.drafts || latest.current.source !== snapshot)
+        return;
       const r = await requests.request(
         'drafts',
         {
@@ -399,8 +426,10 @@ export default function Home() {
           logisticsSummary: judgement ? JSON.stringify(judgement) : '',
         },
         modelKey,
+        { bypassCache: regenerate },
       );
-      if (id !== job.current || latest.current.source !== snapshot) return;
+      if (id !== jobs.current.drafts || latest.current.source !== snapshot)
+        return;
       setDrafts(r.drafts ?? []);
       setVersion(0);
       setHistoryReply(false);
@@ -411,17 +440,17 @@ export default function Home() {
         setTranslation({
           mail,
           text: r.translation,
-          language: detected,
+          language: r.language ?? detected,
         });
     } catch (e) {
-      if (!cancelled(e) && id === job.current) setNotice(message(e));
+      if (!cancelled(e) && id === jobs.current.drafts) setNotice(message(e));
     } finally {
-      if (id === job.current) setBusy(null);
+      if (id === jobs.current.drafts) setBusy(null);
     }
   }
   async function sync() {
     if (!selected || !chinese.trim() || busy || !dirty || stale) return;
-    const id = ++job.current;
+    const id = ++jobs.current.sync;
     const original = chinese;
     const index = version;
     setBusy('sync');
@@ -433,7 +462,7 @@ export default function Home() {
         modelKey,
       );
       if (
-        id !== job.current ||
+        id !== jobs.current.sync ||
         latest.current.version !== index ||
         latest.current.chinese !== original
       )
@@ -446,9 +475,9 @@ export default function Home() {
         ),
       );
     } catch (e) {
-      if (!cancelled(e) && id === job.current) setNotice(message(e));
+      if (!cancelled(e) && id === jobs.current.sync) setNotice(message(e));
     } finally {
-      if (id === job.current) setBusy(null);
+      if (id === jobs.current.sync) setBusy(null);
     }
   }
   async function track() {
@@ -524,7 +553,9 @@ export default function Home() {
     }
   }
   function nextMail() {
-    job.current++;
+    jobs.current.translate++;
+    jobs.current.drafts++;
+    jobs.current.sync++;
     requests.clear();
     trackAbort.current?.abort();
     trackCache.current.clear();
@@ -579,6 +610,7 @@ export default function Home() {
       chineseReply: chinese,
       localizedReply: selected.localized,
       targetLanguage: draftLanguage,
+      buyerLanguage: currentTranslation?.language ?? detected ?? '',
     };
     setHistorySaving(true);
     try {
@@ -593,15 +625,74 @@ export default function Home() {
       };
       if (!response.ok || !result.record)
         throw Error(result.error ?? '历史记录保存失败。');
-      setHistoryRecords((records) => [
-        result.record!,
-        ...records.filter((item) => item.id !== result.record!.id),
-      ]);
       setNotice('已复制，历史记录已保存。');
     } catch (error) {
       setNotice(`已复制，但${message(error)}`);
     } finally {
       setHistorySaving(false);
+    }
+  }
+  async function loadMoreHistory() {
+    if (historyLoading || historyLoadingMore || !historyHasMore) return;
+    const id = ++historyJob.current;
+    const nextPage = historyPage + 1;
+    const params = new URLSearchParams({ page: String(nextPage) });
+    if (historyShop !== 'all') params.set('shopId', historyShop);
+    if (historySearch.trim()) params.set('query', historySearch.trim());
+    const range = historyDateRange(historyDate);
+    if (range) {
+      params.set('from', String(range.from));
+      params.set('to', String(range.to));
+    }
+    setHistoryLoadingMore(true);
+    setHistoryError('');
+    try {
+      const response = await apiFetch('/api/history?' + params.toString(), {
+        cache: 'no-store',
+      });
+      const result = (await response.json()) as {
+        records?: MailHistorySummary[];
+        hasMore?: boolean;
+        error?: string;
+      };
+      if (!response.ok) throw Error(result.error ?? '历史记录读取失败。');
+      if (id !== historyJob.current) return;
+      setHistoryRecords((records) => {
+        const known = new Set(records.map((record) => record.id));
+        return [
+          ...records,
+          ...(result.records ?? []).filter((record) => !known.has(record.id)),
+        ];
+      });
+      setHistoryHasMore(Boolean(result.hasMore));
+      setHistoryPage(nextPage);
+    } catch (error) {
+      if (!cancelled(error) && id === historyJob.current)
+        setHistoryError(message(error));
+    } finally {
+      if (id === historyJob.current) setHistoryLoadingMore(false);
+    }
+  }
+  async function openHistory(record: MailHistorySummary) {
+    if (historyRestoring) return;
+    setHistoryRestoring(record.id);
+    setHistoryError('');
+    try {
+      const response = await apiFetch(
+        '/api/history?id=' + encodeURIComponent(record.id),
+        { cache: 'no-store' },
+      );
+      const result = (await response.json()) as {
+        record?: MailHistoryRecord;
+        error?: string;
+      };
+      if (!response.ok || !result.record)
+        throw Error(result.error ?? '历史记录读取失败。');
+      restoreHistory(result.record);
+    } catch (error) {
+      setHistoryError(message(error));
+    } finally {
+      setHistoryRestoring('');
     }
   }
   function restoreHistory(record: MailHistoryRecord) {
@@ -639,7 +730,9 @@ export default function Home() {
       settings,
     );
 
-    job.current++;
+    jobs.current.translate++;
+    jobs.current.drafts++;
+    jobs.current.sync++;
     requests.clear();
     trackAbort.current?.abort();
     setShopId(restoredShop.id);
@@ -649,7 +742,7 @@ export default function Home() {
         ? {
             mail: record.buyerMail,
             text: record.buyerTranslation,
-            language: restoredLanguage,
+            language: record.buyerLanguage || restoredLanguage,
           }
         : null,
     );
@@ -676,7 +769,7 @@ export default function Home() {
     setHistoryOpen(false);
     setNotice('历史记录已回填。');
   }
-  async function deleteHistory(record: MailHistoryRecord) {
+  async function deleteHistory(record: MailHistorySummary) {
     if (!window.confirm(`删除 ${record.shopName} 的这条历史记录？`)) return;
     try {
       const response = await apiFetch(
@@ -1296,7 +1389,7 @@ export default function Home() {
           <SheetHeader className="history-head">
             <SheetTitle>历史记录</SheetTitle>
             <SheetDescription>
-              最近 60 天 · {historyRecords.length} 条
+              最近 60 天 · 已加载 {historyRecords.length} 条
             </SheetDescription>
           </SheetHeader>
           <div className="history-filters">
@@ -1331,64 +1424,80 @@ export default function Home() {
             </div>
           </div>
           <div className="history-list">
-            {historyLoading ? (
+            {historyLoading && !historyRecords.length ? (
               <div className="history-empty">正在读取…</div>
-            ) : historyError ? (
+            ) : historyError && !historyRecords.length ? (
               <div className="history-empty error">{historyError}</div>
-            ) : filteredHistory.length ? (
-              filteredHistory.map((record) => (
-                <article className="history-item" key={record.id}>
-                  <button
-                    className="history-restore"
-                    onClick={() => restoreHistory(record)}
-                  >
-                    <div className="history-item-top">
-                      <span className="history-shop">{record.shopName}</span>
-                      <time dateTime={new Date(record.createdAt).toISOString()}>
-                        {new Date(record.createdAt).toLocaleString('zh-CN', {
-                          month: '2-digit',
-                          day: '2-digit',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </time>
-                    </div>
-                    <p>
-                      {record.buyerTranslation ||
-                        record.buyerMail ||
-                        record.customInstruction ||
-                        '仅回复内容'}
-                    </p>
-                    <div className="history-meta">
-                      <span>
-                        {languageNames[record.targetLanguage] ??
-                          record.targetLanguage}
-                      </span>
-                      {record.trackingNumber && (
-                        <span>{record.trackingNumber}</span>
-                      )}
-                      {record.action !== 'none' && (
+            ) : historyRecords.length ? (
+              <>
+                {historyError && (
+                  <div className="history-inline-error">{historyError}</div>
+                )}
+                {historyRecords.map((record) => (
+                  <article className="history-item" key={record.id}>
+                    <button
+                      className="history-restore"
+                      disabled={historyRestoring === record.id}
+                      onClick={() => void openHistory(record)}
+                    >
+                      <div className="history-item-top">
+                        <span className="history-shop">{record.shopName}</span>
+                        <time
+                          dateTime={new Date(record.createdAt).toISOString()}
+                        >
+                          {new Date(record.createdAt).toLocaleString('zh-CN', {
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </time>
+                      </div>
+                      <p>
+                        {historyRestoring === record.id
+                          ? '正在回填…'
+                          : record.preview || '仅回复内容'}
+                      </p>
+                      <div className="history-meta">
                         <span>
-                          {actionOptions.find(
-                            (item) => item.id === record.action,
-                          )?.title ?? record.action}
+                          {languageNames[record.targetLanguage] ??
+                            record.targetLanguage}
                         </span>
-                      )}
-                    </div>
-                  </button>
+                        {record.trackingNumber && (
+                          <span>{record.trackingNumber}</span>
+                        )}
+                        {record.action !== 'none' && (
+                          <span>
+                            {actionOptions.find(
+                              (item) => item.id === record.action,
+                            )?.title ?? record.action}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                    <button
+                      className="history-delete"
+                      aria-label="删除这条历史记录"
+                      title="删除"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteHistory(record);
+                      }}
+                    >
+                      <Trash2 />
+                    </button>
+                  </article>
+                ))}
+                {historyHasMore && (
                   <button
-                    className="history-delete"
-                    aria-label="删除这条历史记录"
-                    title="删除"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void deleteHistory(record);
-                    }}
+                    className="history-more"
+                    disabled={historyLoadingMore}
+                    onClick={() => void loadMoreHistory()}
                   >
-                    <Trash2 />
+                    {historyLoadingMore ? '正在加载…' : '加载更多'}
                   </button>
-                </article>
-              ))
+                )}
+              </>
             ) : (
               <div className="history-empty">没有符合条件的记录</div>
             )}

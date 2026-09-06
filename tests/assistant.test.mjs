@@ -32,6 +32,29 @@ test('format failures retry twice and stop after three total attempts', async ()
   assert.equal(attempts, 3);
 });
 
+test('all structural model output errors retry, while safety errors do not', async () => {
+  let attempts = 0;
+  const recovered = await withFormatRetry(async () => {
+    attempts++;
+    if (attempts === 1) throw new Error('未返回完整的三个版本，请重试。');
+    if (attempts === 2) throw new Error('邮件翻译未保持原文换行，请重试。');
+    return 'ok';
+  });
+  assert.equal(recovered, 'ok');
+  assert.equal(attempts, 3);
+
+  attempts = 0;
+  await assert.rejects(
+    () =>
+      withFormatRetry(async () => {
+        attempts++;
+        throw new Error('回复含高风险内容，请调整要求后重试。');
+      }),
+    /高风险/,
+  );
+  assert.equal(attempts, 1);
+});
+
 test('translation excludes store, logistics and reply scaffolding', () => {
   const t = buildTask({
     mode: 'translate',
@@ -217,6 +240,12 @@ test('risk controls apply to sync too without banning normal order review langua
       localized: 'We will review your order details.',
     }),
   );
+  assert.doesNotThrow(() =>
+    checkAndNormalize('sync', {
+      language: 'en',
+      localized: 'We will update you after we review the tracking details.',
+    }),
+  );
 });
 test('draft cache avoids a second call after its translation has been displayed', async (t) => {
   let calls = 0;
@@ -232,6 +261,18 @@ test('draft cache avoids a second call after its translation has been displayed'
   );
   await session.request('drafts', { mail: 'hello', hasTranslation: true }, 'm');
   assert.equal(calls, 1);
+});
+test('regenerating drafts bypasses a completed cache entry', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({ language: 'en', drafts: [] });
+  });
+  const session = new RequestSession();
+  const payload = { mail: 'hello', hasTranslation: true };
+  await session.request('drafts', payload, 'm');
+  await session.request('drafts', payload, 'm', { bypassCache: true });
+  assert.equal(calls, 2);
 });
 test('session deduplicates in-flight calls and caches exact results', async (t) => {
   let calls = 0;

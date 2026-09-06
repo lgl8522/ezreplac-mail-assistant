@@ -224,7 +224,7 @@ export function buildLocalizationTask(
 
 export function assertSafeReply(s: string) {
   const risk =
-    /(?:remove|delete|change|update|leave|write|positive)[\s\S]{0,35}(?:review|feedback|rating)|(?:修改|删除|移除|好评|索要|留下).{0,12}(?:评价|评论)|(?:レビュー|評価).{0,12}(?:変更|削除|星5)|https?:\/\/|\bwww\.|\b[\w.+-]+@[\w-]+\.[\w.-]+\b|\b(?:whatsapp|wechat|coupon|gift card)\b/i;
+    /(?:remove|delete|change|edit|update)\s+(?:your\s+|the\s+)?(?:review|feedback|rating)|(?:leave|write|post|submit)\s+(?:us\s+|a\s+)?(?:(?:positive|five[- ]star|5[- ]star)\s+)?(?:review|feedback|rating)|(?:positive|five[- ]star|5[- ]star)\s+(?:review|feedback|rating)|(?:修改|删除|移除|索要|留下|撰写|提交).{0,8}(?:评价|评论|好评)|(?:好评|五星评价)|(?:レビュー|評価).{0,8}(?:変更|削除|五つ星|星5)|https?:\/\/|\bwww\.|\b[\w.+-]+@[\w-]+\.[\w.-]+\b|\b(?:whatsapp|wechat|coupon|gift card)\b/i;
   if (risk.test(s)) throw new Error('回复含高风险内容，请调整要求后重试。');
 }
 
