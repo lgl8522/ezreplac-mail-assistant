@@ -92,12 +92,12 @@ test('incomplete or empty provider responses are rejected', () => {
 test('draft creation and localization are separate strict steps', () => {
   const sync = buildTask({
     mode: 'sync',
-    chinese: 'Dear Customer,\n您的包裹已寄出。\nBest regards,\nEZReplac',
+    chinese: 'Dear Customer,\n您的包裹已寄出。\nBest regards,\nEZReplace',
     language: 'ja',
   });
   assert.match(sync.instructions, /称呼、正文、结束语都要翻译/);
   assert.match(sync.instructions, /不照抄Dear Customer/);
-  assert.match(sync.instructions, /固定署名EZReplac/);
+  assert.match(sync.instructions, /固定署名EZReplace/);
   const drafts = buildTask({
     mode: 'drafts',
     mail: 'Dear Customer,\n荷物が届いていません。',
@@ -109,9 +109,9 @@ test('draft creation and localization are separate strict steps', () => {
   assert.deepEqual(drafts.schema.properties.drafts.items.required, ['chinese']);
 
   const chineseDrafts = [
-    '您好，退款金额为10美元。\nEZReplac',
-    '您好，包裹单号YT123456仍在运输。\nEZReplac',
-    '您好，请等待3天。\nEZReplac',
+    '您好，退款金额为10美元。\nEZReplace',
+    '您好，包裹单号YT123456仍在运输。\nEZReplace',
+    '您好，请等待3天。\nEZReplace',
   ];
   const generated = checkAndNormalize('drafts', {
     language: 'ja',
@@ -133,9 +133,9 @@ test('draft creation and localization are separate strict steps', () => {
   const localized = checkAndNormalizeLocalization(
     {
       localized: [
-        'こんにちは、返金額は10ドルです。\nEZReplac',
-        'こんにちは、荷物番号YT123456はまだ輸送中です。\nEZReplac',
-        'こんにちは、3日間お待ちください。\nEZReplac',
+        'こんにちは、返金額は10ドルです。\nEZReplace',
+        'こんにちは、荷物番号YT123456はまだ輸送中です。\nEZReplace',
+        'こんにちは、3日間お待ちください。\nEZReplace',
       ],
     },
     chineseDrafts,

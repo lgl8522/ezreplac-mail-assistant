@@ -452,7 +452,7 @@
   .compose {
     display: flex;
     flex-direction: column;
-    min-height: 713px;
+    min-height: 620px;
   }
   .compose .content {
     flex: 1;
@@ -611,7 +611,7 @@
     text-align: center;
   }
   .reply {
-    min-height: 713px;
+    min-height: 620px;
   }
   .reply-header {
     padding: 18px 22px 0;
@@ -687,7 +687,7 @@
     border-radius: 6px;
   }
   .editor-cn {
-    height: 213px;
+    height: 170px;
     font-size: 12px;
     line-height: 1.95;
     padding: 13px;
@@ -713,7 +713,9 @@
     border-radius: 11px;
     padding: 15px;
     color: #505c70;
-    min-height: 197px;
+    height: 160px;
+    min-height: 160px;
+    overflow: auto;
     font-size: 12px;
     line-height: 1.95;
     white-space: pre-wrap;
@@ -769,9 +771,11 @@
     .workspace {
       gap: 25px;
     }
-    .compose,
     .reply {
-      min-height: 757px;
+      min-height: 650px;
+    }
+    .compose {
+      min-height: 640px;
     }
     .mail {
       height: 139px;
@@ -783,10 +787,11 @@
       height: 215px;
     }
     .editor-cn {
-      height: 237px;
+      height: 180px;
     }
     .buyer-box {
-      min-height: 217px;
+      height: 170px;
+      min-height: 170px;
     }
     .card-header {
       padding-top: 20px;
@@ -823,7 +828,7 @@
       margin-bottom: 0;
     }
     .compose {
-      min-height: 715px;
+      min-height: 620px;
     }
     .store select {
       min-width: 180px;

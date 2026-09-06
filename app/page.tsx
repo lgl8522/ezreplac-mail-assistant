@@ -488,7 +488,7 @@ export default function Home() {
         <div className="brand">
           <div className="mark">E</div>
           <div>
-            <div className="brand-name">EZReplac</div>
+            <div className="brand-name">EZReplace</div>
             <div className="brand-sub">MAIL WORKSPACE</div>
           </div>
           <div className="sep" />

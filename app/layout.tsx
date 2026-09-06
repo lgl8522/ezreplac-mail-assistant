@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'EZReplac 邮件助手',
+  title: 'EZReplace 邮件助手',
   description: '个人亚马逊客服邮件回复与物流处理工具',
 };
 
