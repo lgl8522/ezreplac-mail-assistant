@@ -1116,7 +1116,11 @@ export default function Home() {
                   onClick={generate}
                   disabled={!!busy || !configured}
                 >
-                  {busy === 'drafts' ? '生成中…' : '生成 3 个回复版本'}
+                  {busy === 'drafts'
+                    ? '生成中…'
+                    : drafts.length
+                      ? '重新生成 3 个回复版本'
+                      : '生成 3 个回复版本'}
                   <ArrowRight />
                 </button>
               </div>
