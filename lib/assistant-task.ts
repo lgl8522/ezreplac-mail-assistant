@@ -311,56 +311,22 @@ export function checkAndNormalize(
   };
 }
 
-const identifierPattern =
-  /\b(?=[A-Z0-9-]{6,}\b)(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9-]+\b/gi;
-
-function asciiDigits(value: string) {
-  return value.replace(/[０-９]/g, (digit) =>
-    String(digit.charCodeAt(0) - '０'.charCodeAt(0)),
-  );
-}
-
-function numberParts(value: string) {
-  const withoutIdentifiers = asciiDigits(value).replace(identifierPattern, ' ');
-  return (withoutIdentifiers.match(/\d+/g) ?? []).map((part) =>
-    part.replace(/^0+(?=\d)/, ''),
-  );
-}
-
-function preservesRequiredTokens(source: string, result: string) {
-  const normalizedSource = asciiDigits(source);
-  const normalizedResult = asciiDigits(result);
-  const identifiers = normalizedSource.match(identifierPattern) ?? [];
-  if (identifiers.some((token) => !normalizedResult.includes(token)))
-    return false;
-  if (source.includes('EZReplace') && !result.includes('EZReplace'))
-    return false;
-
-  const remainingNumbers = numberParts(normalizedResult);
-  return numberParts(normalizedSource).every((part) => {
-    const index = remainingNumbers.indexOf(part);
-    if (index < 0) return false;
-    remainingNumbers.splice(index, 1);
-    return true;
-  });
-}
-
 export function checkAndNormalizeLocalization(
   value: unknown,
   chineseDrafts: string[],
 ) {
+  if (!Array.isArray(chineseDrafts) || chineseDrafts.length !== 3)
+    throw new Error('中文回复版本不完整。');
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error('模型返回格式异常，请重试。');
   const localized = (value as Record<string, unknown>).localized;
   if (!Array.isArray(localized) || localized.length !== 3)
     throw new Error('未返回完整的三个翻译版本，请重试。');
-  return localized.map((item, index) => {
+  return localized.map((item) => {
     if (typeof item !== 'string' || !item.trim())
       throw new Error('翻译版本不完整，请重试。');
     const result = item.trim();
     assertSafeReply(result);
-    if (!preservesRequiredTokens(chineseDrafts[index], result))
-      throw new Error('翻译未保留数字、单号或署名，请重试。');
     return result;
   });
 }

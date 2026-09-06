@@ -53,7 +53,40 @@ type ProviderResult = {
     type?: string;
     content?: Array<{ type?: string; text?: string }>;
   }>;
+  choices?: Array<{
+    message?: {
+      content?: string | Array<{ type?: string; text?: string }>;
+    };
+  }>;
 };
+
+function parseJsonOutput(value: string) {
+  const trimmed = value.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1];
+  const objectStart = trimmed.indexOf('{');
+  const objectEnd = trimmed.lastIndexOf('}');
+  const arrayStart = trimmed.indexOf('[');
+  const arrayEnd = trimmed.lastIndexOf(']');
+  const candidates = [
+    trimmed,
+    fenced,
+    objectStart >= 0 && objectEnd > objectStart
+      ? trimmed.slice(objectStart, objectEnd + 1)
+      : '',
+    arrayStart >= 0 && arrayEnd > arrayStart
+      ? trimmed.slice(arrayStart, arrayEnd + 1)
+      : '',
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next compatible response shape.
+    }
+  }
+  throw new Error('模型返回格式异常，请重试。');
+}
 
 async function readProviderJson(response: Response) {
   if (!response.ok)
@@ -68,13 +101,17 @@ async function readProviderJson(response: Response) {
       .flatMap((item) => item.content ?? [])
       .filter((item) => item.type === 'output_text')
       .map((item) => item.text ?? '')
+      .join('') ||
+    result.choices
+      ?.map((choice) => choice.message?.content)
+      .flatMap((content) =>
+        typeof content === 'string'
+          ? [content]
+          : (content ?? []).map((item) => item.text ?? ''),
+      )
       .join('');
   if (!output?.trim()) throw new Error('模型返回为空，请核对模型名称。');
-  try {
-    return JSON.parse(output.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''));
-  } catch {
-    throw new Error('模型返回格式异常，请重试。');
-  }
+  return parseJsonOutput(output);
 }
 
 type ModelTask =

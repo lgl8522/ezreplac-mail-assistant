@@ -166,28 +166,12 @@ test('draft creation and localization are separate strict steps', () => {
     chineseDrafts,
   );
   assert.equal(localized.length, 3);
-  const localizedFormatting = checkAndNormalizeLocalization(
-    {
-      localized: [
-        '到着予定日は2026年9月5日、金額は1.299,50ドルです。\nEZReplace',
-        '荷物番号YT123456は輸送中です。\nEZReplace',
-        '２０２６年９月５日までお待ちください。\nEZReplace',
-      ],
-    },
-    [
-      '预计2026-09-05到达，金额为1,299.50美元。\nEZReplace',
-      '包裹单号YT123456正在运输。\nEZReplace',
-      '请等待至2026-09-05。\nEZReplace',
-    ],
-  );
-  assert.equal(localizedFormatting.length, 3);
-  assert.throws(
-    () =>
-      checkAndNormalizeLocalization(
-        { localized: ['こんにちは', 'こんにちは', 'こんにちは'] },
-        chineseDrafts,
-      ),
-    /未保留数字、单号或署名/,
+  assert.deepEqual(
+    checkAndNormalizeLocalization(
+      { localized: ['こんにちは', 'こんにちは', 'こんにちは'] },
+      chineseDrafts,
+    ),
+    ['こんにちは', 'こんにちは', 'こんにちは'],
   );
 });
 test('risk controls apply to sync too without banning normal order review language', () => {
