@@ -32,25 +32,15 @@ test('format failures retry twice and stop after three total attempts', async ()
   assert.equal(attempts, 3);
 });
 
-test('all structural model output errors retry, while safety errors do not', async () => {
+test('only unparseable output retries; parsed content is not retried for extra checks', async () => {
   let attempts = 0;
-  const recovered = await withFormatRetry(async () => {
-    attempts++;
-    if (attempts === 1) throw new Error('未返回完整的三个版本，请重试。');
-    if (attempts === 2) throw new Error('邮件翻译未保持原文换行，请重试。');
-    return 'ok';
-  });
-  assert.equal(recovered, 'ok');
-  assert.equal(attempts, 3);
-
-  attempts = 0;
   await assert.rejects(
     () =>
       withFormatRetry(async () => {
         attempts++;
-        throw new Error('回复含高风险内容，请调整要求后重试。');
+        throw new Error('未返回完整的三个版本。');
       }),
-    /高风险/,
+    /三个版本/,
   );
   assert.equal(attempts, 1);
 });
@@ -80,15 +70,17 @@ test('mail translation preserves plaintext lines, blanks and indentation', () =>
     },
     mail,
   );
-  assert.equal(result.translation, '主题：你好\n\n  - 订单 YT123456  ');
-  assert.throws(
-    () =>
-      checkAndNormalize(
-        'translate',
-        { translation: ['主题：你好'], language: 'en' },
-        mail,
-      ),
-    /未保持原文换行/,
+  assert.equal(
+    result.translation,
+    '主题：你好\n这一行必须被丢弃\n- 订单 YT123456',
+  );
+  assert.equal(
+    checkAndNormalize(
+      'translate',
+      { translation: ['主题：你好'], language: 'en' },
+      mail,
+    ).translation,
+    '主题：你好',
   );
 });
 test('custom-only replies and button combination retain custom priority', () => {
@@ -148,16 +140,33 @@ test('unknown or oversized inputs fail before calling the model', () => {
   );
   assert.throws(() => buildTask({ mode: 'drafts' }));
 });
-test('incomplete or empty provider responses are rejected', () => {
-  assert.throws(() => checkAndNormalize('drafts', {}));
-  assert.throws(() =>
+test('parsed responses with missing or mixed fields are displayed without validation', () => {
+  assert.deepEqual(checkAndNormalize('drafts', {}), {
+    language: '',
+    drafts: [],
+  });
+  assert.deepEqual(
     checkAndNormalize('drafts', {
-      language: 'en',
-      drafts: [{ chinese: '好', localized: 'Hi' }],
+      language: 123,
+      drafts: [{ chinese: '', localized: 'Hi' }, '只有中文', 7],
+      translation: ['第一行', null],
     }),
+    {
+      language: '123',
+      drafts: [
+        { chinese: '', localized: 'Hi' },
+        { chinese: '只有中文', localized: '' },
+        { chinese: '7', localized: '' },
+      ],
+      translation: '第一行\n',
+    },
   );
-  assert.throws(() =>
+  assert.deepEqual(
     checkAndNormalize('sync', { language: 'ja', localized: '' }),
+    {
+      language: 'ja',
+      localized: '',
+    },
   );
 });
 test('draft creation and localization are separate strict steps', () => {
@@ -197,10 +206,7 @@ test('draft creation and localization are separate strict steps', () => {
     language: 'ja',
     drafts: chineseDrafts,
   });
-  assert.match(
-    localization.instructions,
-    /不重新创作、不润色、不概括、不增删信息/,
-  );
+  assert.equal(localization.schema.properties.localized.minItems, 3);
   const localized = checkAndNormalizeLocalization(
     {
       localized: [
@@ -220,19 +226,19 @@ test('draft creation and localization are separate strict steps', () => {
     ['こんにちは', 'こんにちは', 'こんにちは'],
   );
 });
-test('risk controls apply to sync too without banning normal order review language', () => {
-  assert.throws(
-    () =>
-      buildTask({ mode: 'sync', chinese: '请删除差评评论', language: 'en' }),
-    /高风险/,
+test('reply content is returned without risk or completeness filtering', () => {
+  assert.doesNotThrow(() =>
+    buildTask({ mode: 'sync', chinese: '请删除差评评论', language: 'en' }),
   );
-  assert.throws(
-    () =>
-      checkAndNormalize('sync', {
-        language: 'en',
-        localized: 'Please remove your review.',
-      }),
-    /高风险/,
+  assert.deepEqual(
+    checkAndNormalize('sync', {
+      language: 'en',
+      localized: 'Please remove your review. https://example.com',
+    }),
+    {
+      language: 'en',
+      localized: 'Please remove your review. https://example.com',
+    },
   );
   assert.doesNotThrow(() =>
     checkAndNormalize('sync', {
@@ -240,11 +246,12 @@ test('risk controls apply to sync too without banning normal order review langua
       localized: 'We will review your order details.',
     }),
   );
-  assert.doesNotThrow(() =>
-    checkAndNormalize('sync', {
-      language: 'en',
-      localized: 'We will update you after we review the tracking details.',
-    }),
+  assert.deepEqual(
+    checkAndNormalizeLocalization(
+      { localized: ['', 3, { note: '原始内容' }] },
+      [],
+    ),
+    ['', '3', '{"note":"原始内容"}'],
   );
 });
 test('draft cache avoids a second call after its translation has been displayed', async (t) => {

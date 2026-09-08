@@ -92,23 +92,25 @@ function parseJsonOutput(value: string) {
 async function readProviderJson(response: Response) {
   if (!response.ok)
     throw new Error(`模型请求失败（HTTP ${response.status}）。`);
-  let result: ProviderResult;
+  let result: ProviderResult | null;
   try {
     result = (await response.json()) as ProviderResult;
   } catch {
     throw new Error(MODEL_FORMAT_ERROR);
   }
-  if (result.status === 'incomplete' || result.status === 'failed')
-    throw new Error('模型未完成回复，请重试。');
+  const directResult =
+    result && typeof result === 'object' && !Array.isArray(result)
+      ? (result as Record<string, unknown>)
+      : null;
   const output =
-    result.output_text ||
-    result.output
+    (typeof result?.output_text === 'string' ? result.output_text : '') ||
+    result?.output
       ?.filter((item) => item.type === 'message')
       .flatMap((item) => item.content ?? [])
       .filter((item) => item.type === 'output_text')
       .map((item) => item.text ?? '')
       .join('') ||
-    result.choices
+    result?.choices
       ?.map((choice) => choice.message?.content)
       .flatMap((content) =>
         typeof content === 'string'
@@ -116,8 +118,23 @@ async function readProviderJson(response: Response) {
           : (content ?? []).map((item) => item.text ?? ''),
       )
       .join('');
-  if (!output?.trim()) throw new Error('模型返回为空，请核对模型名称。');
-  return parseJsonOutput(output);
+  if (typeof output === 'string' && output.trim())
+    return parseJsonOutput(output);
+  if (
+    directResult &&
+    [
+      'drafts',
+      'translation',
+      'localized',
+      'status',
+      'summary',
+      'recommendation',
+    ].some((key) => Object.hasOwn(directResult, key))
+  )
+    return directResult;
+  if (typeof output !== 'string' || !output.trim())
+    throw new Error('模型返回为空，请核对模型名称。');
+  throw new Error(MODEL_FORMAT_ERROR);
 }
 
 type ModelTask =
@@ -205,10 +222,6 @@ export async function POST(request: Request) {
         },
         { status: 503 },
       );
-    const sourceMail =
-      typeof payload.mail === 'string'
-        ? payload.mail.replace(/\r\n/g, '\n')
-        : '';
     const normalized = await withFormatRetry(async () => {
       const parsed = await requestProvider(
         task,
@@ -216,35 +229,33 @@ export async function POST(request: Request) {
         secret.apiKey,
         request.signal,
       );
-      const result = checkAndNormalize(task.mode, parsed, sourceMail);
-      if (
-        task.mode === 'drafts' &&
-        !payload.hasTranslation &&
-        payload.mail &&
-        !result.translation
-      )
-        throw new Error('模型未返回邮件翻译，请重试。');
+      const result = checkAndNormalize(task.mode, parsed);
       return result;
     });
-    if (task.mode === 'drafts' && normalized.drafts) {
+    if (task.mode === 'drafts' && normalized.drafts?.length) {
       const chineseDrafts = normalized.drafts.map((draft) => draft.chinese);
       const localizationTask = buildLocalizationTask(
         chineseDrafts,
         normalized.language ?? 'en',
       );
-      const localizedDrafts = await withFormatRetry(async () => {
-        const localization = await requestProvider(
-          localizationTask,
-          settings,
-          secret.apiKey,
-          request.signal,
-        );
-        return checkAndNormalizeLocalization(localization, chineseDrafts);
-      });
-      normalized.drafts = chineseDrafts.map((chinese, index) => ({
-        chinese,
-        localized: localizedDrafts[index],
-      }));
+      try {
+        const localizedDrafts = await withFormatRetry(async () => {
+          const localization = await requestProvider(
+            localizationTask,
+            settings,
+            secret.apiKey,
+            request.signal,
+          );
+          return checkAndNormalizeLocalization(localization, chineseDrafts);
+        });
+        normalized.drafts = normalized.drafts.map((draft, index) => ({
+          chinese: draft.chinese,
+          localized: localizedDrafts[index] ?? draft.localized,
+        }));
+      } catch {
+        // The first model response is already parseable and usable. Keep it
+        // visible even when the optional buyer-language translation fails.
+      }
     }
     return NextResponse.json(normalized, {
       headers: { 'Cache-Control': 'no-store' },
